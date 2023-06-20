@@ -71,7 +71,7 @@ impl Default for LinchFlags {
         Self {
             command: Default::default(),
             rows: NonZeroUsize::new(15).unwrap(),
-            columns: NonZeroUsize::new(3).unwrap(),
+            columns: NonZeroUsize::new(5).unwrap(),
             foreground: Color::from_rgb(1.0, 1.0, 1.0),
             background: Color::from_rgb(0.0, 0.0, 0.0),
             accent: Color::from_rgb(1.0, 0.7, 0.4),
@@ -95,7 +95,9 @@ enum Message {
 
 // TODO: remove if it works well
 static FOCUS: AtomicBool = AtomicBool::new(false);
-const WIDTH: u32=800;
+const PAD_INPUT: f32 = 5.0;
+const PAD_LIST: f32 = 2.0;
+const WIDTH: u32 = 800;
 
 struct Linch {
     command: Arc<Mutex<Option<std::process::Command>>>,
@@ -160,43 +162,58 @@ impl Application for Linch {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        widget::column![
-            widget::text_input("Search", &self.input).size(self.font_size)
+        widget::column(vec![
+            widget::text_input("Search", &self.input)
+                .size(self.font_size)
+                .padding(PAD_INPUT)
                 .id(text_input::Id::new("entry"))
                 .on_submit(Message::Submit)
-                .on_input(Message::Input),
-                widget::row({
-                    let items = &mut self.items_filter().enumerate();
-                    (0..self.columns)
-                        .map(|_| {
-                            widget::column(
-                                items
-                                    .take(self.rows)
-                                    .map(|(n, s)| {
-                                        if n == self.index {
-                                            Text::new(s)
-                                                .size(self.font_size)
-                                                .style(self.acc)
-                                                .into()
-                                        } else {
-                                            Text::new(s).size(self.font_size).into()
-                                        }
-                                    })
-                                    .collect(),
+                .on_input(Message::Input)
+                .into(),
+            widget::row({
+                let items = &mut self.items_filter().enumerate();
+                (0..self.columns)
+                    .map(|_| {
+                        widget::column(
+                            items
+                                .take(self.rows)
+                                .map(|(n, s)| {
+                                    if n == self.index {
+                                        // can't disable wrap??
+                                        Text::new(s).size(self.font_size).style(self.acc).into()
+                                    } else {
+                                        Text::new(s).size(self.font_size).into()
+                                    }
+                                })
+                                .collect(),
                             // force column size cause Row doesnt expand to fill...
-                            ).spacing(0.0).width((WIDTH as f64 / self.columns as f64 / self.scale_factor()).floor() as u16)
-                            .into()
-                        })
-                        .collect()
-                })
-                .spacing(0.0)
-        ]
+                        )
+                        .padding(0.0)
+                        .spacing(0.0)
+                        .width(
+                            ((WIDTH as f64 / self.scale_factor() - PAD_LIST as f64 * 2.0)
+                                / self.columns as f64)
+                                .floor() as u16,
+                        )
+                        .into()
+                    })
+                    .collect()
+            })
+            .padding(PAD_LIST)
+            .spacing(0.0)
+            .into(),
+        ])
+            .padding(0.0)
+            .spacing(0.0)
         .into()
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
-            Message::Input(s) => {self.index = 0; self.input = s},
+            Message::Input(s) => {
+                self.index = 0;
+                self.input = s
+            }
             Message::Toggle => self.input_selected = !self.input_selected,
             Message::Up => {
                 if self.index == 0 {
@@ -226,7 +243,7 @@ impl Application for Linch {
             Message::Forward(c) => {
                 if !self.input_selected {
                     self.input.push(c);
-                    self.index=0;
+                    self.index = 0;
                     self.input_selected = true
                 }
             }
@@ -315,13 +332,19 @@ impl Application for Linch {
 }
 
 fn main() {
-    let flags = LinchFlags::default();
+    let mut flags = LinchFlags::default();
     let command = flags.command.clone();
     Linch::run(iced::Settings {
         window: window::Settings {
             resizable: false,
             always_on_top: true,
-            size: (WIDTH, (flags.font_size * (usize::from(flags.rows) as f32 + 2.0) * scale_factor() as f32).ceil() as u32),
+            size: (
+                WIDTH,
+                ((flags.font_size * (usize::from(flags.rows) as f32 + 1.0)
+                    + (PAD_LIST + PAD_INPUT + 1.0/* inp bord */) * 2.0)
+                    * scale_factor() as f32)
+                    .ceil() as u32,
+            ),
             ..Default::default()
         },
         flags,
