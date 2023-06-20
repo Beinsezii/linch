@@ -3,7 +3,7 @@ use std::{
     env,
     num::NonZeroUsize,
     path::PathBuf,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 use lexical_sort::{natural_lexical_cmp, StringSort};
@@ -37,6 +37,16 @@ fn get_binaries() -> HashMap<String, PathBuf> {
     binaries
 }
 
+fn scale_factor() -> f64 {
+    if let Ok(val) = env::var("GDK_DPI_SCALE") {
+        val.parse::<f64>().expect("Bad GDK_DPI_SCALE value")
+    } else if let Ok(val) = env::var("GDK_SCALE") {
+        val.parse::<f64>().expect("Bad GDK_SCALE value")
+    } else {
+        1.0
+    }
+}
+
 macro_rules! kc {
     ($key_code:expr) => {
         iced::Event::Keyboard(keyboard::Event::KeyPressed {
@@ -54,7 +64,6 @@ struct LinchFlags {
     background: Color,
     accent: Color,
     font_size: f32,
-    spacing: f32,
 }
 
 impl Default for LinchFlags {
@@ -67,7 +76,6 @@ impl Default for LinchFlags {
             background: Color::from_rgb(0.0, 0.0, 0.0),
             accent: Color::from_rgb(1.0, 0.7, 0.4),
             font_size: 20.0,
-            spacing: 20.0,
         }
     }
 }
@@ -87,6 +95,7 @@ enum Message {
 
 // TODO: remove if it works well
 static FOCUS: AtomicBool = AtomicBool::new(false);
+const WIDTH: u32=800;
 
 struct Linch {
     command: Arc<Mutex<Option<std::process::Command>>>,
@@ -98,8 +107,9 @@ struct Linch {
     scroll: usize,
     items: Vec<String>,
     font_size: f32,
-    spacing: f32,
-    theme: Theme,
+    fg: Color,
+    bg: Color,
+    acc: Color,
 }
 
 impl Linch {
@@ -137,14 +147,9 @@ impl Application for Linch {
                 rows: flags.rows.into(),
                 columns: flags.columns.into(),
                 font_size: flags.font_size,
-                spacing: flags.spacing,
-                theme: Theme::custom(Palette {
-                    background: flags.background,
-                    text: flags.foreground,
-                    primary: flags.accent,
-                    success: flags.accent,
-                    danger: flags.accent,
-                }),
+                bg: flags.background,
+                fg: flags.foreground,
+                acc: flags.accent,
             },
             text_input::focus(text_input::Id::new("entry")),
         )
@@ -156,39 +161,42 @@ impl Application for Linch {
 
     fn view(&self) -> Element<'_, Self::Message> {
         widget::column![
-            widget::text_input("Search", &self.input)
+            widget::text_input("Search", &self.input).size(self.font_size)
                 .id(text_input::Id::new("entry"))
                 .on_submit(Message::Submit)
                 .on_input(Message::Input),
-            widget::scrollable(widget::row({
-                let items = &mut self.items_filter().enumerate();
-                (0..self.columns)
-                    .map(|_| {
-                        widget::column(
-                            items
-                                .take(self.rows)
-                                .map(|(n, s)| {
-                                    if n == self.index {
-                                        let mut result = String::from("> ");
-                                        result += s;
-                                        Text::new(result).size(self.font_size).into()
-                                    } else {
-                                        Text::new(s).size(self.font_size).into()
-                                    }
-                                })
-                                .collect(),
-                        )
-                        .into()
-                    })
-                    .collect()
-            }).spacing(self.spacing)),
+                widget::row({
+                    let items = &mut self.items_filter().enumerate();
+                    (0..self.columns)
+                        .map(|_| {
+                            widget::column(
+                                items
+                                    .take(self.rows)
+                                    .map(|(n, s)| {
+                                        if n == self.index {
+                                            Text::new(s)
+                                                .size(self.font_size)
+                                                .style(self.acc)
+                                                .into()
+                                        } else {
+                                            Text::new(s).size(self.font_size).into()
+                                        }
+                                    })
+                                    .collect(),
+                            // force column size cause Row doesnt expand to fill...
+                            ).spacing(0.0).width((WIDTH as f64 / self.columns as f64 / self.scale_factor()).floor() as u16)
+                            .into()
+                        })
+                        .collect()
+                })
+                .spacing(0.0)
         ]
         .into()
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
-            Message::Input(s) => self.input = s,
+            Message::Input(s) => {self.index = 0; self.input = s},
             Message::Toggle => self.input_selected = !self.input_selected,
             Message::Up => {
                 if self.index == 0 {
@@ -200,7 +208,8 @@ impl Application for Linch {
             Message::Down => {
                 if self.input_selected {
                     self.input_selected = false
-                } else if self.index + 1 < self.rows * self.columns {
+                }
+                if self.index + 1 < self.rows * self.columns {
                     self.index += 1;
                 }
             }
@@ -217,6 +226,7 @@ impl Application for Linch {
             Message::Forward(c) => {
                 if !self.input_selected {
                     self.input.push(c);
+                    self.index=0;
                     self.input_selected = true
                 }
             }
@@ -238,13 +248,7 @@ impl Application for Linch {
     }
 
     fn scale_factor(&self) -> f64 {
-        if let Ok(val) = env::var("GDK_DPI_SCALE") {
-            val.parse::<f64>().expect("Bad GDK_DPI_SCALE value")
-        } else if let Ok(val) = env::var("GDK_SCALE") {
-            val.parse::<f64>().expect("Bad GDK_SCALE value")
-        } else {
-            1.0
-        }
+        scale_factor()
     }
 
     fn subscription(&self) -> iced::Subscription<Self::Message> {
@@ -263,8 +267,10 @@ impl Application for Linch {
                 Some(Message::Left)
             } else if event == kc!(KeyCode::Right) {
                 Some(Message::Right)
-            } else if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key_code, modifiers }) =
-                event
+            } else if let iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key_code,
+                modifiers,
+            }) = event
             {
                 let offset = if modifiers == keyboard::Modifiers::SHIFT {
                     0
@@ -273,9 +279,13 @@ impl Application for Linch {
                 };
                 if key_code as u32 <= 35 {
                     match key_code as u32 {
-                        0..=8 => Some(Message::Forward(char::from_u32(key_code as u32 + 49).unwrap())),
+                        0..=8 => Some(Message::Forward(
+                            char::from_u32(key_code as u32 + 49).unwrap(),
+                        )),
                         9 => Some(Message::Forward('0')),
-                        10.. => Some(Message::Forward(char::from_u32(key_code as u32 + 52 + offset).unwrap())),
+                        10.. => Some(Message::Forward(
+                            char::from_u32(key_code as u32 + 55 + offset).unwrap(),
+                        )),
                     }
                 } else {
                     None
@@ -283,7 +293,9 @@ impl Application for Linch {
             } else if event == iced::Event::Window(window::Event::Focused) {
                 FOCUS.store(true, std::sync::atomic::Ordering::SeqCst);
                 None
-            } else if event == iced::Event::Window(window::Event::Unfocused) && FOCUS.load(std::sync::atomic::Ordering::SeqCst) {
+            } else if event == iced::Event::Window(window::Event::Unfocused)
+                && FOCUS.load(std::sync::atomic::Ordering::SeqCst)
+            {
                 Some(Message::Quit)
             } else {
                 None
@@ -292,7 +304,13 @@ impl Application for Linch {
     }
 
     fn theme(&self) -> Self::Theme {
-        self.theme.clone()
+        Theme::custom(Palette {
+            background: self.bg,
+            text: self.fg,
+            primary: self.acc,
+            success: self.acc,
+            danger: self.acc,
+        })
     }
 }
 
@@ -303,6 +321,7 @@ fn main() {
         window: window::Settings {
             resizable: false,
             always_on_top: true,
+            size: (WIDTH, (flags.font_size * (usize::from(flags.rows) as f32 + 2.0) * scale_factor() as f32).ceil() as u32),
             ..Default::default()
         },
         flags,
