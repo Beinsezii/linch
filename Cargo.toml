@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 regex="1"
-egui="0.22"
+eframe={version = "0.22", features=["wgpu", "default_fonts"]}
 clap="4"
 lexical-sort="0.3"
