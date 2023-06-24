@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+colcon="0.1"
 regex="1"
 eframe={version = "0.22", features=["wgpu", "default_fonts"]}
 clap="4"
