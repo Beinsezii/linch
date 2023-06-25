@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     env,
+    fs::metadata,
     num::NonZeroUsize,
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -26,9 +28,14 @@ fn get_binaries() -> HashMap<String, PathBuf> {
             if let Ok(entries) = std::fs::read_dir(directory) {
                 for entry in entries {
                     if let Ok(entry) = entry {
-                        let entry = entry.path();
-                        if let Some(fname) = entry.file_name() {
-                            binaries.insert(fname.to_string_lossy().to_string(), entry);
+                        if let Ok(meta) = entry.metadata() {
+                            let bit = 0b1;
+                            if meta.is_file() && meta.permissions().mode() & bit == bit {
+                                let path = entry.path();
+                                if let Some(fname) = path.file_name() {
+                                    binaries.insert(fname.to_string_lossy().to_string(), path);
+                                }
+                            }
                         }
                     }
                 }
@@ -255,55 +262,46 @@ impl App for Linch {
                         };
                     });
 
-                let sense = Sense {
-                    click: true,
-                    drag: false,
-                    focusable: true,
-                };
                 Grid::new("Items")
                     .min_row_height(sy)
                     .min_col_width(sx)
                     .show(ui, |ui| {
                         let items = self.items_filtered();
                         for r in 0..self.rows {
-                            for c in 0..self.columns{
-                                if let Some(i) = items.get(c * self.rows + r) {
-                                    if self.index == r + self.rows * c {
-                                        Frame::none().fill(hicol).show(ui, |ui| {
-                                            ui.set_min_size(ui.available_size());
-                                            if ui
-                                                .add(
-                                                    Label::new(
-                                                        RichText::new(i).size(font).color(self.bg),
-                                                    )
-                                                    .sense(sense),
-                                                )
-                                                .clicked()
-                                            {
-                                                if self.input_selected {
-                                                    self.input_selected = false;
-                                                } else {
-                                                    self.set();
-                                                    frame.close();
-                                                }
-                                            }
-                                        });
+                            for c in 0..self.columns {
+                                let n = r + self.rows * c;
+                                if let Some(i) = items.get(n) {
+                                    let (text, fill, submit) = if self.index == n {
+                                        (self.bg, hicol, true)
                                     } else {
-                                        if ui
-                                            .add(
-                                                Label::new(RichText::new(i).size(font))
-                                                    .sense(sense),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.input_selected = false;
-                                            self.index = r + self.rows * c
-                                        };
+                                        (self.fg, Color32::TRANSPARENT, false)
+                                    };
+                                    if Frame::none()
+                                        .fill(fill)
+                                        .show(ui, |ui| {
+                                            // this prevents the Grid from shrinking but resize is
+                                            // false for now so it doesn't matter
+                                            ui.set_min_size(ui.available_size());
+                                            ui.add(Label::new(
+                                                RichText::new(i).size(font).color(text),
+                                            ))
+                                        })
+                                        .response
+                                        .interact(Sense::click())
+                                        .clicked()
+                                    {
+                                        self.input_selected = false;
+                                        if submit && !self.input_selected {
+                                            self.set();
+                                            frame.close();
+                                        } else {
+                                            self.index = n;
+                                        }
                                     }
                                 }
-                            };
+                            }
                             ui.end_row();
-                        };
+                        }
                     });
             });
     }
@@ -331,7 +329,7 @@ fn main() {
                 Color32::WHITE,
                 Color32::BLACK,
                 Color32::LIGHT_GREEN,
-                0.2 // scales weird?
+                0.2, // scales weird?
             ))
         }),
     )
