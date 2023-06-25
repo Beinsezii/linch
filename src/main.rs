@@ -181,6 +181,8 @@ impl App for Linch {
             if i.key_pressed(Key::Enter) {
                 self.set();
                 frame.close();
+            } else if i.key_pressed(Key::Escape) {
+                frame.close();
             } else if i.key_pressed(Key::Tab) {
                 self.input_selected = !self.input_selected;
             } else if i.key_pressed(Key::ArrowUp) && !self.input_selected {
