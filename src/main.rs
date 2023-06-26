@@ -13,14 +13,23 @@ use eframe::{
     egui::{
         self,
         style::{Selection, Spacing, WidgetVisuals, Widgets},
-        CentralPanel, Color32, Frame, Grid, Key, Modifiers, RichText,
-        Sense, Stroke, Style, TextEdit, Visuals,
+        CentralPanel, Color32, Frame, Grid, Key, Modifiers, Sense, Stroke, Style, TextEdit,
+        Visuals,
     },
+    emath::Align2,
     epaint::{FontId, Vec2},
     App, NativeOptions,
 };
 
+use clap::{Parser, Subcommand};
+use regex::Regex;
+
+fn parse_color(s: &str) -> Result<Color32, String> {
+    colcon::hex_to_irgb(s).map(|rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+}
+
 fn get_binaries() -> HashMap<String, PathBuf> {
+    // {{{
     let mut binaries = HashMap::new();
     if let Ok(paths) = env::var("PATH") {
         for directory in paths.split(':') {
@@ -41,53 +50,59 @@ fn get_binaries() -> HashMap<String, PathBuf> {
             }
         }
     }
-
     binaries
-}
+} // }}}
 
-// fn scale_factor() -> f64 {
-//     if let Ok(val) = env::var("GDK_DPI_SCALE") {
-//         val.parse::<f64>().expect("Bad GDK_DPI_SCALE value")
-//     } else if let Ok(val) = env::var("GDK_SCALE") {
-//         val.parse::<f64>().expect("Bad GDK_SCALE value")
-//     } else {
-//         1.0
-//     }
-// }
+fn scale_factor() -> f32 {
+    if let Ok(val) = env::var("GDK_DPI_SCALE") {
+        val.parse::<f32>().expect("Bad GDK_DPI_SCALE value")
+    } else if let Ok(val) = env::var("GDK_SCALE") {
+        val.parse::<f32>().expect("Bad GDK_SCALE value")
+    } else {
+        1.0
+    }
+}
 
 struct Linch {
     input: String,
+    input_compiled: Option<Regex>,
     input_selected: bool,
     index: usize,
     scroll: usize,
     hover: Option<usize>,
     focused: bool,
-    exit_unfocus: bool,
-    items: Vec<String>,
 
     response: Arc<Mutex<Option<String>>>,
+    items: Vec<String>,
+    prompt: String,
     columns: usize,
     rows: usize,
     fg: Color32,
     bg: Color32,
     acc: Color32,
+    literal: bool,
+    exit_unfocus: bool,
 }
 
 impl Linch {
+    // {{{
     fn new(
         cc: &eframe::CreationContext<'_>,
         items: Vec<String>,
         response: Arc<Mutex<Option<String>>>,
+        prompt: String,
         columns: usize,
         rows: usize,
         fg: Color32,
         bg: Color32,
         acc: Color32,
         opacity: f32,
+        literal: bool,
         exit_unfocus: bool,
     ) -> Self {
         let style = cc.egui_ctx.style().as_ref().clone();
         cc.egui_ctx.set_style(Style {
+            wrap: Some(false),
             visuals: Visuals {
                 widgets: Widgets {
                     noninteractive: WidgetVisuals {
@@ -132,37 +147,53 @@ impl Linch {
 
         Self {
             input: String::new(),
+            input_compiled: None,
             input_selected: false,
             index: 0,
             scroll: 0,
             hover: None,
             focused: false,
-            exit_unfocus,
-            items,
 
+            items,
             response,
-            rows,
+            prompt,
             columns,
+            rows,
             bg,
             fg,
             acc,
+            literal,
+            exit_unfocus,
         }
     }
 
     fn items_filter(&self) -> impl Iterator<Item = &String> {
-        self.items.iter().filter(|s| s.starts_with(&self.input))
+        self.items.iter().filter(|s| {
+            if let Some(re) = &self.input_compiled {
+                re.is_match(s)
+            } else {
+                s.starts_with(&self.input)
+            }
+        })
     }
 
-    fn items_filtered(&self) -> Vec<String> {
-        self.items_filter().map(|s| s.clone()).collect()
+    fn items_filtered(&self, n: usize) -> Vec<String> {
+        self.items_filter().take(n).cloned().collect()
+    }
+
+    fn compile(&mut self) {
+        if !self.literal {
+            self.input_compiled = Regex::new(&self.input).ok()
+        }
     }
 
     fn set(&self) {
         *self.response.lock().unwrap() = self.items_filter().nth(self.index).cloned()
     }
-}
+} // }}}
 
 impl App for Linch {
+    // {{{
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         match frame.info().window_info.focused {
             true => self.focused = true,
@@ -231,10 +262,13 @@ impl App for Linch {
                             TextEdit::singleline(&mut self.input)
                                 .frame(false)
                                 .font(FontId::proportional(font))
-                                .text_color(tecol),
+                                .text_color(tecol)
+                                // hint color == gray_out(noninteractive_color)
+                                .hint_text(&self.prompt)
+                                .lock_focus(true),
                         );
-
                         if response.changed() {
+                            self.compile();
                             self.index = 0
                         }
                         if response.clicked() {
@@ -246,38 +280,47 @@ impl App for Linch {
                 Grid::new("Items")
                     .min_row_height(sy)
                     .min_col_width(sx)
+                    .max_col_width(sx)
                     .show(ui, |ui| {
-                        let items = self.items_filtered();
+                        let items = self.items_filtered(self.rows * self.columns);
                         let mut hover_set = false;
                         for r in 0..self.rows {
                             for c in 0..self.columns {
                                 let n = r + self.rows * c;
                                 if let Some(i) = items.get(n) {
                                     let mut stroke = Stroke::NONE;
-                                    let (text, fill, submit) = if self.index == n {
-                                        (RichText::new(i).size(font).color(self.bg), hicol, true)
+                                    let mut text = ui.style().visuals.text_color();
+                                    let mut fill = Color32::TRANSPARENT;
+                                    let mut submit = false;
+                                    if self.index == n {
+                                        text = self.bg;
+                                        submit = true;
+                                        fill = hicol;
                                     } else if self.hover == Some(n) {
                                         stroke = Stroke {
                                             color: self.acc,
                                             width: 2.0,
                                         };
-                                        (
-                                            RichText::new(i).size(font).color(self.acc),
-                                            Color32::TRANSPARENT,
-                                            false,
-                                        )
-                                    } else {
-                                        (RichText::new(i).size(font), Color32::TRANSPARENT, false)
-                                    };
+                                        text = self.acc;
+                                    }
                                     let response = Frame::none()
                                         .stroke(stroke)
                                         .fill(fill)
-                                        .inner_margin(4.0)
+                                        .inner_margin(3.0)
                                         .show(ui, |ui| {
-                                            // this prevents the Grid from shrinking but resize is
-                                            // false for now so it doesn't matter
-                                            ui.set_min_size(ui.available_size());
-                                            ui.label(text)
+                                            // manually paint text to avoid overallocation
+                                            ui.allocate_painter(
+                                                ui.available_size(),
+                                                Sense::hover(), // 3 false
+                                            )
+                                            .1
+                                            .text(
+                                                ui.max_rect().left_center(),
+                                                Align2::LEFT_CENTER,
+                                                i,
+                                                FontId::proportional(font),
+                                                text,
+                                            );
                                         })
                                         .response
                                         .interact(Sense::click());
@@ -304,49 +347,125 @@ impl App for Linch {
                     });
             });
     }
+} // }}}
+
+#[derive(Subcommand)]
+enum LinchCmd {
+    /// Launch a binary directly. Scans PATH by default
+    Bin,
+    /// Launch a desktop application.
+    App,
+    // Big maybe. If it's easy enough then sure, else no
+    // /// dmenu compatibility mode
+    // Dmenu,
 }
 
-fn main() {
-    let response = Arc::new(Mutex::new(None));
-    let resp_capt = response.clone();
-    let binaries = get_binaries();
-    let mut items: Vec<String> = binaries.keys().cloned().collect();
-    items.string_sort_unstable(natural_lexical_cmp);
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct LinchArgs {
+    // {{{
+    /// Which mode to run
+    #[command(subcommand)]
+    command: LinchCmd,
+
+    #[arg(short, long, default_value = "Run")]
+    prompt: String,
+
+    #[arg(short, long, default_value = "3")]
+    columns: NonZeroUsize,
+
+    #[arg(short, long, default_value = "15")]
+    rows: NonZeroUsize,
+
+    /// Window width in pixels
+    #[arg(short = 'x', long, default_value = "800.0")]
+    width: f32,
+
+    /// Window height in pixels
+    #[arg(short = 'y', long, default_value = "400.0")]
+    height: f32,
+
+    /// Foreground color in hex
+    #[arg(short, long, default_value = "#ffffff", value_parser=parse_color)]
+    foreground: Color32,
+
+    /// Background color in hex
+    #[arg(short, long, default_value = "#000000", value_parser=parse_color)]
+    background: Color32,
+
+    /// Accent color in hex
+    #[arg(short, long, default_value = "#ffbb66", value_parser=parse_color)]
+    accent: Color32,
+
+    /// Background opacity 0.0 -> 1.0
+    #[arg(short, long, default_value = "0.5")]
+    opacity: f32,
+
+    /// Match literal text as opposed to regular expressions
+    #[arg(short, long)]
+    literal: bool,
+
+    /// Close linch on focus loss
+    #[arg(short, long)]
+    exit_unfocus: bool,
+} // }}}
+
+fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
+    // {{{
+    let result = Arc::new(Mutex::new(None));
+    let res_send = result.clone();
+    let factor = scale_factor();
     eframe::run_native(
         "Linch",
         NativeOptions {
             resizable: false,
             always_on_top: true,
             centered: true,
-            initial_window_size: Some(Vec2::new(800.0, 400.0)),
+            initial_window_size: Some(Vec2::new(args.width * factor, args.height * factor)),
             ..Default::default()
         },
-        Box::new(|cc| {
+        Box::new(move |cc| {
             Box::new(Linch::new(
                 cc,
                 items,
-                resp_capt,
-                3,
-                15,
-                Color32::WHITE,
-                Color32::BLACK,
-                Color32::LIGHT_GREEN,
-                0.2, // scales weird?
-                true,
+                res_send,
+                args.prompt,
+                args.columns.into(),
+                args.rows.into(),
+                args.foreground,
+                args.background,
+                args.accent,
+                args.opacity, // scales weird? Wayland issue?
+                args.literal,
+                args.exit_unfocus,
             ))
         }),
     )
     .expect("Linch died");
+    // Arc::<Mutex<Option<String>>>::into_inner(result).map(|m| m.into_inner().unwrap()).flatten()
+    let result = result.lock().unwrap().as_ref().cloned();
+    result
+} // }}}
 
-    if let Some(response) = response.lock().unwrap().as_ref() {
-        // Child doesnt implement Drop so it just conveniently forks
-        let mut command = std::process::Command::new(response);
-        if let Err(e) = command.spawn() {
-            panic!(
-                "Could not start process {}\n{}",
-                command.get_program().to_string_lossy(),
-                e
-            );
-        };
+fn main() {
+    // {{{
+    let args = LinchArgs::parse();
+
+    match args.command {
+        LinchCmd::Bin => {
+            let mut items: Vec<String> = get_binaries().keys().cloned().collect();
+            items.string_sort_unstable(natural_lexical_cmp);
+            if let Some(result) = response(items, args) {
+                let mut command = std::process::Command::new(result);
+                if let Err(e) = command.spawn() {
+                    panic!(
+                        "Could not start process {}\n{}",
+                        command.get_program().to_string_lossy(),
+                        e
+                    );
+                };
+            }
+        }
+        LinchCmd::App => unimplemented!("Desktop application support not yet implemented"),
     };
-}
+} // }}}
