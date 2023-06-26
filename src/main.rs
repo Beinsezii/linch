@@ -17,7 +17,7 @@ use eframe::{
         Visuals,
     },
     emath::Align2,
-    epaint::{FontId, Vec2},
+    epaint::{FontId, Rounding, Shadow, Vec2},
     App, NativeOptions,
 };
 
@@ -80,6 +80,7 @@ struct Linch {
     fg: Color32,
     bg: Color32,
     acc: Color32,
+    scale: f32,
     literal: bool,
     exit_unfocus: bool,
 }
@@ -97,6 +98,7 @@ impl Linch {
         bg: Color32,
         acc: Color32,
         opacity: f32,
+        scale: f32,
         literal: bool,
         exit_unfocus: bool,
     ) -> Self {
@@ -119,11 +121,14 @@ impl Linch {
                     stroke: Stroke::NONE,
                 },
                 window_fill: bg.gamma_multiply(opacity),
+                window_shadow: Shadow::NONE,
+                window_stroke: Stroke::new(3.0 * scale, acc),
+                window_rounding: Rounding::none(),
                 ..style.visuals
             },
             spacing: Spacing {
                 item_spacing: (0.0, 0.0).into(),
-                window_margin: 0.0.into(),
+                window_margin: (4.0 * scale).into(),
                 button_padding: (0.0, 0.0).into(),
                 menu_margin: 0.0.into(),
                 indent: 0.0,
@@ -162,6 +167,7 @@ impl Linch {
             bg,
             fg,
             acc,
+            scale,
             literal,
             exit_unfocus,
         }
@@ -194,6 +200,9 @@ impl Linch {
 
 impl App for Linch {
     // {{{
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        Color32::TRANSPARENT.to_normalized_gamma_f32()
+    }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         match frame.info().window_info.focused {
             true => self.focused = true,
@@ -232,11 +241,7 @@ impl App for Linch {
             }
         });
         CentralPanel::default()
-            .frame(
-                Frame::window(&ctx.style())
-                    .inner_margin(1.0)
-                    .outer_margin(1.0),
-            )
+            .frame(Frame::window(&ctx.style()))
             .show(ctx, |ui| {
                 let (x, y) = match ui.available_size() {
                     // it works though
@@ -253,9 +258,10 @@ impl App for Linch {
                 };
                 Frame::none() // the default frame isn't colorable?
                     .stroke(Stroke {
-                        width: 2.0,
+                        width: 2.0 * self.scale,
                         color: tecol,
                     })
+                    .outer_margin(1.0 * self.scale)
                     .show(ui, |ui| {
                         let response = ui.add_sized(
                             Vec2 { x, y: sy },
@@ -299,14 +305,14 @@ impl App for Linch {
                                     } else if self.hover == Some(n) {
                                         stroke = Stroke {
                                             color: self.acc,
-                                            width: 2.0,
+                                            width: 2.0 * self.scale,
                                         };
                                         text = self.acc;
                                     }
                                     let response = Frame::none()
                                         .stroke(stroke)
                                         .fill(fill)
-                                        .inner_margin(3.0)
+                                        .inner_margin(2.0 * self.scale)
                                         .show(ui, |ui| {
                                             // manually paint text to avoid overallocation
                                             ui.allocate_painter(
@@ -377,11 +383,11 @@ struct LinchArgs {
     #[arg(short, long, default_value = "15")]
     rows: NonZeroUsize,
 
-    /// Window width in pixels
+    /// Window width. Affected by scale
     #[arg(short = 'x', long, default_value = "800.0")]
     width: f32,
 
-    /// Window height in pixels
+    /// Window height. Affected by scale
     #[arg(short = 'y', long, default_value = "400.0")]
     height: f32,
 
@@ -398,8 +404,14 @@ struct LinchArgs {
     accent: Color32,
 
     /// Background opacity 0.0 -> 1.0
-    #[arg(short, long, default_value = "0.5")]
+    #[arg(short, long, default_value = "0.8")]
     opacity: f32,
+
+    /// Override scale factor from environment variables.
+    /// Applies on top of desktop/system scale factor.
+    /// Currently reads GDK_DPI_SCALE, GDK_SCALE
+    #[arg(short, long)]
+    scale: Option<f32>,
 
     /// Match literal text as opposed to regular expressions
     #[arg(short, long)]
@@ -414,14 +426,15 @@ fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
     // {{{
     let result = Arc::new(Mutex::new(None));
     let res_send = result.clone();
-    let factor = scale_factor();
+    let scale = args.scale.unwrap_or(scale_factor());
     eframe::run_native(
         "Linch",
         NativeOptions {
             resizable: false,
             always_on_top: true,
             centered: true,
-            initial_window_size: Some(Vec2::new(args.width * factor, args.height * factor)),
+            transparent: true,
+            initial_window_size: Some(Vec2::new(args.width * scale, args.height * scale)),
             ..Default::default()
         },
         Box::new(move |cc| {
@@ -435,7 +448,8 @@ fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
                 args.foreground,
                 args.background,
                 args.accent,
-                args.opacity, // scales weird? Wayland issue?
+                args.opacity,
+                scale,
                 args.literal,
                 args.exit_unfocus,
             ))
