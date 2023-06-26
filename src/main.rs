@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     env,
-    fs::metadata,
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
@@ -13,11 +12,11 @@ use lexical_sort::{natural_lexical_cmp, StringSort};
 use eframe::{
     egui::{
         self,
-        style::{Margin, Spacing, WidgetVisuals, Widgets},
-        Button, CentralPanel, Color32, Context, Frame, Grid, Key, Label, RichText, Sense, Stroke,
-        Style, TextEdit, Visuals,
+        style::{Selection, Spacing, WidgetVisuals, Widgets},
+        CentralPanel, Color32, Frame, Grid, Key, Modifiers, RichText,
+        Sense, Stroke, Style, TextEdit, Visuals,
     },
-    epaint::{FontId, Rounding, Vec2},
+    epaint::{FontId, Vec2},
     App, NativeOptions,
 };
 
@@ -61,9 +60,12 @@ struct Linch {
     input_selected: bool,
     index: usize,
     scroll: usize,
+    hover: Option<usize>,
+    focused: bool,
+    exit_unfocus: bool,
     items: Vec<String>,
 
-    command: Arc<Mutex<Option<std::process::Command>>>,
+    response: Arc<Mutex<Option<String>>>,
     columns: usize,
     rows: usize,
     fg: Color32,
@@ -74,53 +76,32 @@ struct Linch {
 impl Linch {
     fn new(
         cc: &eframe::CreationContext<'_>,
-        command: Arc<Mutex<Option<std::process::Command>>>,
+        items: Vec<String>,
+        response: Arc<Mutex<Option<String>>>,
         columns: usize,
         rows: usize,
         fg: Color32,
         bg: Color32,
         acc: Color32,
         opacity: f32,
+        exit_unfocus: bool,
     ) -> Self {
-        let binaries = get_binaries();
-        let keys = binaries.keys();
-        let mut items = Vec::with_capacity(keys.len());
-        for key in keys {
-            items.push(key.to_string())
-        }
-        items.string_sort_unstable(natural_lexical_cmp);
-
-        // let rounding = Rounding::none();
-        // let bg_stroke = Stroke::none();
         let style = cc.egui_ctx.style().as_ref().clone();
-        let stroke_fg = Stroke {
-            color: fg,
-            ..Default::default()
-        };
-        let stroke_bg = Stroke {
-            color: bg,
-            ..Default::default()
-        };
-        let stroke_acc = Stroke {
-            color: acc,
-            ..Default::default()
-        };
         cc.egui_ctx.set_style(Style {
             visuals: Visuals {
                 widgets: Widgets {
-                    inactive: WidgetVisuals {
-                        fg_stroke: stroke_fg,
-                        ..style.visuals.widgets.inactive
-                    },
-                    hovered: WidgetVisuals {
-                        fg_stroke: stroke_acc,
-                        ..style.visuals.widgets.hovered
-                    },
-                    active: WidgetVisuals {
-                        fg_stroke: stroke_bg,
-                        ..style.visuals.widgets.active
+                    noninteractive: WidgetVisuals {
+                        fg_stroke: Stroke {
+                            color: fg,
+                            ..Default::default()
+                        },
+                        ..style.visuals.widgets.noninteractive
                     },
                     ..style.visuals.widgets
+                },
+                selection: Selection {
+                    bg_fill: acc.gamma_multiply(0.5),
+                    stroke: Stroke::NONE,
                 },
                 window_fill: bg.gamma_multiply(opacity),
                 ..style.visuals
@@ -151,12 +132,15 @@ impl Linch {
 
         Self {
             input: String::new(),
-            input_selected: true,
+            input_selected: false,
             index: 0,
             scroll: 0,
+            hover: None,
+            focused: false,
+            exit_unfocus,
             items,
 
-            command,
+            response,
             rows,
             columns,
             bg,
@@ -174,46 +158,46 @@ impl Linch {
     }
 
     fn set(&self) {
-        *self.command.lock().unwrap() = self
-            .items_filter()
-            .nth(self.index)
-            .map(|s| std::process::Command::new(s));
+        *self.response.lock().unwrap() = self.items_filter().nth(self.index).cloned()
     }
 }
 
 impl App for Linch {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        match frame.info().window_info.focused {
+            true => self.focused = true,
+            false => {
+                if self.focused && self.exit_unfocus {
+                    frame.close()
+                }
+            }
+        }
         let count = self.items_filter().count().min(self.rows * self.columns);
-        ctx.input(|i| {
-            if i.key_pressed(Key::Enter) {
+        ctx.input_mut(|i| {
+            if i.consume_key(Modifiers::NONE, Key::Enter) {
                 self.set();
                 frame.close();
-            } else if i.key_pressed(Key::Escape) {
+            } else if i.consume_key(Modifiers::NONE, Key::Escape) {
                 frame.close();
-            } else if i.key_pressed(Key::Tab) {
+            } else if i.consume_key(Modifiers::NONE, Key::Tab) {
                 self.input_selected = !self.input_selected;
-            } else if i.key_pressed(Key::ArrowUp) && !self.input_selected {
-                if self.index % self.rows == 0 {
-                    self.input_selected = true;
-                } else {
+            }
+            if !self.input_selected {
+                if i.consume_key(Modifiers::NONE, Key::ArrowUp) && self.index % self.rows != 0 {
                     self.index -= 1
-                }
-            } else if i.key_pressed(Key::ArrowDown) {
-                if self.input_selected {
-                    self.input_selected = false;
-                } else if self.index % self.rows < self.rows - 1 && self.index < count - 1 {
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                    && self.index % self.rows < self.rows - 1
+                    && self.index < count - 1
+                {
                     self.index += 1
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowRight)
+                    && self.index + self.rows < count
+                {
+                    self.index += self.rows
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowLeft) && self.index >= self.rows
+                {
+                    self.index -= self.rows
                 }
-            } else if i.key_pressed(Key::ArrowRight)
-                && !self.input_selected
-                && self.index + self.rows < count
-            {
-                self.index += self.rows
-            } else if i.key_pressed(Key::ArrowLeft)
-                && !self.input_selected
-                && self.index >= self.rows
-            {
-                self.index -= self.rows
             }
         });
         CentralPanel::default()
@@ -256,10 +240,7 @@ impl App for Linch {
                         if response.clicked() {
                             self.input_selected = true;
                         }
-                        match self.input_selected {
-                            true => response.request_focus(),
-                            false => response.surrender_focus(),
-                        };
+                        response.request_focus()
                     });
 
                 Grid::new("Items")
@@ -267,29 +248,44 @@ impl App for Linch {
                     .min_col_width(sx)
                     .show(ui, |ui| {
                         let items = self.items_filtered();
+                        let mut hover_set = false;
                         for r in 0..self.rows {
                             for c in 0..self.columns {
                                 let n = r + self.rows * c;
                                 if let Some(i) = items.get(n) {
+                                    let mut stroke = Stroke::NONE;
                                     let (text, fill, submit) = if self.index == n {
-                                        (self.bg, hicol, true)
+                                        (RichText::new(i).size(font).color(self.bg), hicol, true)
+                                    } else if self.hover == Some(n) {
+                                        stroke = Stroke {
+                                            color: self.acc,
+                                            width: 2.0,
+                                        };
+                                        (
+                                            RichText::new(i).size(font).color(self.acc),
+                                            Color32::TRANSPARENT,
+                                            false,
+                                        )
                                     } else {
-                                        (self.fg, Color32::TRANSPARENT, false)
+                                        (RichText::new(i).size(font), Color32::TRANSPARENT, false)
                                     };
-                                    if Frame::none()
+                                    let response = Frame::none()
+                                        .stroke(stroke)
                                         .fill(fill)
+                                        .inner_margin(4.0)
                                         .show(ui, |ui| {
                                             // this prevents the Grid from shrinking but resize is
                                             // false for now so it doesn't matter
                                             ui.set_min_size(ui.available_size());
-                                            ui.add(Label::new(
-                                                RichText::new(i).size(font).color(text),
-                                            ))
+                                            ui.label(text)
                                         })
                                         .response
-                                        .interact(Sense::click())
-                                        .clicked()
-                                    {
+                                        .interact(Sense::click());
+                                    if response.hovered() {
+                                        self.hover = Some(n);
+                                        hover_set = true;
+                                    }
+                                    if response.clicked() {
                                         self.input_selected = false;
                                         if submit && !self.input_selected {
                                             self.set();
@@ -302,15 +298,20 @@ impl App for Linch {
                             }
                             ui.end_row();
                         }
+                        if !hover_set {
+                            self.hover = None;
+                        }
                     });
             });
     }
 }
 
 fn main() {
-    let command: Arc<Mutex<Option<std::process::Command>>> = Default::default();
-    let cmd2 = command.clone();
-
+    let response = Arc::new(Mutex::new(None));
+    let resp_capt = response.clone();
+    let binaries = get_binaries();
+    let mut items: Vec<String> = binaries.keys().cloned().collect();
+    items.string_sort_unstable(natural_lexical_cmp);
     eframe::run_native(
         "Linch",
         NativeOptions {
@@ -323,24 +324,27 @@ fn main() {
         Box::new(|cc| {
             Box::new(Linch::new(
                 cc,
-                cmd2,
+                items,
+                resp_capt,
                 3,
                 15,
                 Color32::WHITE,
                 Color32::BLACK,
                 Color32::LIGHT_GREEN,
                 0.2, // scales weird?
+                true,
             ))
         }),
     )
     .expect("Linch died");
 
-    if let Some(cmd) = command.lock().unwrap().as_mut() {
+    if let Some(response) = response.lock().unwrap().as_ref() {
         // Child doesnt implement Drop so it just conveniently forks
-        if let Err(e) = cmd.spawn() {
+        let mut command = std::process::Command::new(response);
+        if let Err(e) = command.spawn() {
             panic!(
                 "Could not start process {}\n{}",
-                cmd.get_program().to_string_lossy(),
+                command.get_program().to_string_lossy(),
                 e
             );
         };
