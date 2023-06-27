@@ -268,9 +268,13 @@ impl App for Linch {
         CentralPanel::default()
             .frame(Frame::window(&ctx.style()))
             .show(ctx, |ui| {
+                // idk why but it works
+                // weirdly the trailing edge is fatter?
+                // also bottom doesnt scale properly with -s 0.5...
+                let marg = ui.spacing().window_margin.top / 2.0;
                 let (x, y) = match ui.available_size() {
                     // it works though
-                    Vec2 { x, y } => (x, y),
+                    Vec2 { x, y } => (x - marg, y - marg),
                 };
                 let sx = x / self.columns as f32;
                 let sy = y / (self.rows + 1) as f32;
@@ -462,7 +466,8 @@ fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
             resizable: false,
             always_on_top: true,
             centered: true,
-            transparent: true,
+            transparent: if args.opacity < 1.0 { true } else { false },
+            decorated: false,
             initial_window_size: Some(Vec2::new(args.width * scale, args.height * scale)),
             ..Default::default()
         },
