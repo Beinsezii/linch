@@ -118,7 +118,10 @@ impl Linch {
                 },
                 selection: Selection {
                     bg_fill: acc.gamma_multiply(0.5),
-                    stroke: Stroke::NONE,
+                    stroke: Stroke {
+                        width: 1.0, // seems fixed?
+                        color: acc,
+                    },
                 },
                 window_fill: bg.gamma_multiply(opacity),
                 window_shadow: Shadow::NONE,
@@ -183,8 +186,12 @@ impl Linch {
         })
     }
 
-    fn items_filtered(&self, n: usize) -> Vec<String> {
-        self.items_filter().take(n).cloned().collect()
+    fn items_filtered(&self, count: usize, skip: usize) -> Vec<String> {
+        self.items_filter()
+            .skip(skip)
+            .take(count)
+            .cloned()
+            .collect()
     }
 
     fn compile(&mut self) {
@@ -194,7 +201,10 @@ impl Linch {
     }
 
     fn set(&self) {
-        *self.response.lock().unwrap() = self.items_filter().nth(self.index).cloned()
+        *self.response.lock().unwrap() = self
+            .items_filter()
+            .nth(self.index + self.scroll * self.rows * self.columns)
+            .cloned()
     }
 } // }}}
 
@@ -212,7 +222,8 @@ impl App for Linch {
                 }
             }
         }
-        let count = self.items_filter().count().min(self.rows * self.columns);
+        let area = self.rows * self.columns;
+        let count = self.items_filter().count() - self.scroll * area;
         ctx.input_mut(|i| {
             if i.consume_key(Modifiers::NONE, Key::Enter) {
                 self.set();
@@ -221,15 +232,29 @@ impl App for Linch {
                 frame.close();
             } else if i.consume_key(Modifiers::NONE, Key::Tab) {
                 self.input_selected = !self.input_selected;
+            } else if i.scroll_delta.y < 0.0 && count > area {
+                self.scroll += 1;
+                self.index = self.index.min(count - area - 1)
+            } else if i.scroll_delta.y > 0.0 && self.scroll > 0 {
+                self.scroll -= 1
             }
             if !self.input_selected {
-                if i.consume_key(Modifiers::NONE, Key::ArrowUp) && self.index % self.rows != 0 {
-                    self.index -= 1
-                } else if i.consume_key(Modifiers::NONE, Key::ArrowDown)
-                    && self.index % self.rows < self.rows - 1
-                    && self.index < count - 1
-                {
-                    self.index += 1
+                if i.consume_key(Modifiers::NONE, Key::ArrowUp) {
+                    if self.index % self.rows != 0 {
+                        self.index -= 1
+                    } else if self.scroll > 0 {
+                        self.scroll -= 1;
+                        self.index += self.rows - 1
+                    }
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
+                    if self.index % self.rows < self.rows - 1
+                        && self.index < count.saturating_sub(1)
+                    {
+                        self.index += 1
+                    } else if count > area {
+                        self.scroll += 1;
+                        self.index = (self.index + 1 - self.rows).min(count - area - 1)
+                    }
                 } else if i.consume_key(Modifiers::NONE, Key::ArrowRight)
                     && self.index + self.rows < count
                 {
@@ -275,7 +300,8 @@ impl App for Linch {
                         );
                         if response.changed() {
                             self.compile();
-                            self.index = 0
+                            self.index = 0;
+                            self.scroll = 0;
                         }
                         if response.clicked() {
                             self.input_selected = true;
@@ -288,7 +314,10 @@ impl App for Linch {
                     .min_col_width(sx)
                     .max_col_width(sx)
                     .show(ui, |ui| {
-                        let items = self.items_filtered(self.rows * self.columns);
+                        let items = self.items_filtered(
+                            self.rows * self.columns,
+                            self.scroll * self.rows * self.columns,
+                        );
                         let mut hover_set = false;
                         for r in 0..self.rows {
                             for c in 0..self.columns {
