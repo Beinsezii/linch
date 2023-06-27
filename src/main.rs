@@ -256,7 +256,7 @@ impl App for Linch {
                         self.index = (self.index + 1 - self.rows).min(count - area - 1)
                     }
                 } else if i.consume_key(Modifiers::NONE, Key::ArrowRight)
-                    && self.index + self.rows < count
+                    && self.index + self.rows < count.min(area)
                 {
                     self.index += self.rows
                 } else if i.consume_key(Modifiers::NONE, Key::ArrowLeft) && self.index >= self.rows
