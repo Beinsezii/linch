@@ -1,13 +1,14 @@
 use std::{
     collections::HashMap,
     env,
+    fs::{read, write},
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use lexical_sort::{natural_lexical_cmp, StringSort};
+use lexical_sort::natural_lexical_cmp;
 
 use eframe::{
     egui::{
@@ -63,6 +64,87 @@ fn scale_factor() -> f32 {
     }
 }
 
+// ### Cache FNS {{{
+
+fn cache_file(name: &str) -> PathBuf {
+    assert!(!name.is_empty());
+    let fname = String::from("/linch_") + name;
+    if let Ok(xdg_cache) = env::var("XDG_CACHE_HOME") {
+        PathBuf::from(xdg_cache + &fname)
+    } else if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home + "/.cache" + &fname)
+    } else {
+        panic!("Could not find cache directory.\nOne of the following must environment variables be set\nXDG_CACHE_HOME\nHOME")
+    }
+}
+
+fn cache_get(name: &str) -> Vec<(usize, String)> {
+    let mut result = Vec::new();
+    if let Ok(bytes) = read(cache_file(name)) {
+        let re = Regex::new(r"^(\d+) +(.+)$").unwrap();
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            if let Some(captures) = re.captures(line.trim()) {
+                result.push((
+                    captures[1].parse::<usize>().unwrap(),
+                    captures[2].to_string(),
+                ))
+            }
+        }
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0).reverse().then(a.1.cmp(&b.1)));
+    result
+}
+
+fn cache_set(name: &str, lines: Vec<(usize, String)>) {
+    write(
+        cache_file(name),
+        lines
+            .into_iter()
+            .map(|(n, s)| format!("{} {}", n, s))
+            .fold(String::new(), |a, b| a + &b + "\n"),
+    )
+    .unwrap();
+}
+
+fn cache_apply(name: &str, items: &mut [String]) {
+    let map: HashMap<String, usize> =
+        HashMap::from_iter(cache_get(name).into_iter().map(|(n, s)| (s, n)));
+    items.sort_by(|a, b| {
+        map.get(a)
+            .unwrap_or(&0)
+            .cmp(map.get(b).unwrap_or(&0))
+            .reverse()
+            .then(natural_lexical_cmp(a, b))
+    });
+}
+
+fn cache_add(name: &str, item: &str) {
+    let mut cache = cache_get(name);
+    let mut set = false;
+    for line in cache.iter_mut() {
+        if line.1 == item {
+            line.0 = line.0.saturating_add(1); //optimistic lol
+            set = true;
+        }
+    }
+    if !set {
+        cache.push((1, item.to_string()))
+    }
+    cache_set(name, cache);
+}
+
+fn cache_del(name: &str, item: &str) {
+    cache_set(
+        name,
+        cache_get(name)
+            .into_iter()
+            .filter(|(_n, s)| s != item)
+            .collect(),
+    );
+}
+
+// ### Cache FNS }}}
+
 struct Linch {
     input: String,
     input_compiled: Option<Regex>,
@@ -74,6 +156,7 @@ struct Linch {
 
     response: Arc<Mutex<Option<String>>>,
     items: Vec<String>,
+    cache: String,
     prompt: String,
     columns: usize,
     rows: usize,
@@ -89,8 +172,9 @@ impl Linch {
     // {{{
     fn new(
         cc: &eframe::CreationContext<'_>,
-        items: Vec<String>,
+        mut items: Vec<String>,
         response: Arc<Mutex<Option<String>>>,
+        cache: String,
         prompt: String,
         columns: usize,
         rows: usize,
@@ -153,6 +237,10 @@ impl Linch {
             ..style
         });
 
+        if !cache.is_empty() {
+            cache_apply(&cache, &mut items);
+        }
+
         Self {
             input: String::new(),
             input_compiled: None,
@@ -164,6 +252,7 @@ impl Linch {
 
             items,
             response,
+            cache,
             prompt,
             columns,
             rows,
@@ -194,6 +283,12 @@ impl Linch {
             .collect()
     }
 
+    fn selected(&self) -> Option<String> {
+        self.items_filter()
+            .nth(self.index + self.scroll * self.rows * self.columns)
+            .cloned()
+    }
+
     fn compile(&mut self) {
         if !self.literal {
             self.input_compiled = Regex::new(&self.input).ok()
@@ -201,10 +296,22 @@ impl Linch {
     }
 
     fn set(&self) {
-        *self.response.lock().unwrap() = self
-            .items_filter()
-            .nth(self.index + self.scroll * self.rows * self.columns)
-            .cloned()
+        let item = self.selected();
+        if let Some(item) = item.as_ref() {
+            if !self.cache.is_empty() {
+                cache_add(&self.cache, item)
+            }
+        }
+        *self.response.lock().unwrap() = item
+    }
+
+    fn del(&mut self) {
+        if !self.cache.is_empty() {
+            if let Some(item) = self.selected() {
+                cache_del(&self.cache, &item);
+                cache_apply(&self.cache, &mut self.items)
+            }
+        }
     }
 } // }}}
 
@@ -232,6 +339,8 @@ impl App for Linch {
                 frame.close();
             } else if i.consume_key(Modifiers::NONE, Key::Tab) {
                 self.input_selected = !self.input_selected;
+            } else if i.consume_key(Modifiers::NONE, Key::Delete) {
+                self.del()
             } else if i.scroll_delta.y < 0.0 && count > area {
                 self.scroll += 1;
                 self.index = self.index.min(count - area - 1)
@@ -453,9 +562,13 @@ struct LinchArgs {
     /// Close linch on focus loss
     #[arg(short, long)]
     exit_unfocus: bool,
+
+    /// Removes all cached entries for given run mode
+    #[arg(long)]
+    clear_cache: bool,
 } // }}}
 
-fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
+fn response(items: Vec<String>, cache: String, args: LinchArgs) -> Option<String> {
     // {{{
     let result = Arc::new(Mutex::new(None));
     let res_send = result.clone();
@@ -476,6 +589,7 @@ fn response(items: Vec<String>, args: LinchArgs) -> Option<String> {
                 cc,
                 items,
                 res_send,
+                cache,
                 args.prompt,
                 args.columns.into(),
                 args.rows.into(),
@@ -501,9 +615,11 @@ fn main() {
 
     match args.command {
         LinchCmd::Bin => {
-            let mut items: Vec<String> = get_binaries().keys().cloned().collect();
-            items.string_sort_unstable(natural_lexical_cmp);
-            if let Some(result) = response(items, args) {
+            let items: Vec<String> = get_binaries().keys().cloned().collect();
+            if args.clear_cache {
+                write(cache_file("bin"), "").unwrap();
+            }
+            if let Some(result) = response(items, String::from("bin"), args) {
                 let mut command = std::process::Command::new(result);
                 if let Err(e) = command.spawn() {
                     panic!(
