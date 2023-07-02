@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     env,
-    fs::{read, write},
+    fs::{read, remove_file, write},
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use lexical_sort::natural_lexical_cmp;
+use lexical_sort::{natural_lexical_cmp, StringSort};
 
 use eframe::{
     egui::{
@@ -239,6 +239,8 @@ impl Linch {
 
         if !cache.is_empty() {
             cache_apply(&cache, &mut items);
+        } else {
+            items.string_sort_unstable(natural_lexical_cmp)
         }
 
         Self {
@@ -563,7 +565,13 @@ struct LinchArgs {
     #[arg(short, long)]
     exit_unfocus: bool,
 
-    /// Removes all cached entries for given run mode
+    /// Override cache name.
+    /// If unset defaults to command name.
+    /// If set to nothing "" caching isn't used
+    #[arg(long)]
+    cache: Option<String>,
+
+    /// Removes all cached entries for given cache
     #[arg(long)]
     clear_cache: bool,
 } // }}}
@@ -573,6 +581,9 @@ fn response(items: Vec<String>, cache: String, args: LinchArgs) -> Option<String
     let result = Arc::new(Mutex::new(None));
     let res_send = result.clone();
     let scale = args.scale.unwrap_or(scale_factor());
+    if args.clear_cache {
+        remove_file(cache_file(&cache)).unwrap();
+    }
     eframe::run_native(
         "Linch",
         NativeOptions {
@@ -616,10 +627,11 @@ fn main() {
     match args.command {
         LinchCmd::Bin => {
             let items: Vec<String> = get_binaries().keys().cloned().collect();
-            if args.clear_cache {
-                write(cache_file("bin"), "").unwrap();
-            }
-            if let Some(result) = response(items, String::from("bin"), args) {
+            if let Some(result) = response(
+                items,
+                args.cache.clone().unwrap_or(String::from("bin")),
+                args,
+            ) {
                 let mut command = std::process::Command::new(result);
                 if let Err(e) = command.spawn() {
                     panic!(
