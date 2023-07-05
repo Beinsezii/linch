@@ -1,6 +1,8 @@
 # linch 0.1.0
 Cross-desktop application launcher made with egui
 
+<img src="./screenshot.png" height = 300 px />
+
 ## Features
   * Launch apps or run commands on X11 and Wayland
   * Search with regular expressions or plain text
@@ -22,6 +24,7 @@ You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
     * Actions?
   * Possible dmenu mode
   * Possibly more CLI options
+  * I should probably add a scroll bar.
 
 ## Known issues
   * Application does not stay always-on-top in Wayland
