@@ -2,14 +2,12 @@ use std::{
     collections::HashMap,
     env,
     ffi::OsString,
-    fs::{read_dir, read_to_string, remove_file, write},
+    fs::{read_to_string, remove_file, write},
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-
-use lexical_sort::{natural_lexical_cmp, StringSort};
 
 use eframe::{
     egui::{
@@ -24,7 +22,9 @@ use eframe::{
 };
 
 use clap::{Parser, Subcommand};
+use lexical_sort::{natural_lexical_cmp, StringSort};
 use regex::Regex;
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 struct Application {
@@ -99,16 +99,14 @@ fn get_binaries() -> HashMap<String, PathBuf> {
     let mut binaries = HashMap::new();
     if let Ok(paths) = env::var("PATH") {
         for directory in paths.split(':') {
-            if let Ok(entries) = read_dir(directory) {
-                for entry in entries {
-                    if let Ok(entry) = entry {
-                        if let Ok(meta) = entry.metadata() {
-                            let bit = 0b1;
-                            if meta.is_file() && meta.permissions().mode() & bit == bit {
-                                let path = entry.path();
-                                if let Some(fname) = path.file_name() {
-                                    binaries.insert(fname.to_string_lossy().to_string(), path);
-                                }
+            for entry in WalkDir::new(directory).follow_links(true) {
+                if let Ok(entry) = entry {
+                    if let Ok(meta) = entry.metadata() {
+                        let bit = 0b1;
+                        if !meta.is_dir() && meta.permissions().mode() & bit == bit {
+                            let path = entry.into_path();
+                            if let Some(fname) = path.file_name() {
+                                binaries.insert(fname.to_string_lossy().to_string(), path);
                             }
                         }
                     }
@@ -141,13 +139,11 @@ fn get_applications(include_hidden: bool) -> HashMap<String, Application> {
 
     for mut path in paths {
         path.push("applications");
-        if let Ok(entries) = read_dir(path) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    if let Ok(application) = Application::from_path(entry.path()) {
-                        if include_hidden | !application.hidden {
-                            result.insert(application.name.clone(), application);
-                        }
+        for entry in WalkDir::new(path).follow_links(true) {
+            if let Ok(entry) = entry {
+                if let Ok(application) = Application::from_path(entry.into_path()) {
+                    if include_hidden | !application.hidden {
+                        result.insert(application.name.clone(), application);
                     }
                 }
             }
