@@ -1,7 +1,8 @@
 use std::{
     collections::HashMap,
     env,
-    fs::{read, remove_file, write},
+    ffi::OsString,
+    fs::{read_dir, read_to_string, remove_file, write},
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
@@ -25,16 +26,80 @@ use eframe::{
 use clap::{Parser, Subcommand};
 use regex::Regex;
 
+#[derive(Debug, Clone)]
+struct Application {
+    file: PathBuf,
+    name: String,
+    exec: Option<String>,
+    path: Option<PathBuf>,
+    _icon: Option<String>,
+    hidden: bool,
+}
+
+impl Application {
+    fn from_path(path: PathBuf) -> Result<Self, ()> {
+        // {{{
+        if path.extension() == Some(OsString::from("desktop").as_os_str()) {
+            if let Ok(data) = read_to_string(&path) {
+                let mut start = false;
+                let mut hm = HashMap::new();
+                for line in data.lines() {
+                    if line.trim() == "[Desktop Entry]" {
+                        start = true;
+                    } else if line.trim().starts_with("[Desktop") {
+                        break;
+                    } else if start {
+                        if let Some((a, b)) = line.split_once("=") {
+                            hm.insert(a.trim().to_string(), b.trim_start().to_string());
+                        }
+                    }
+                }
+                if let Some(name) = hm.get(&String::from("Name")) {
+                    Ok(Self {
+                        file: path,
+                        name: name.to_string(),
+                        exec: hm.get(&String::from("Exec")).cloned(),
+                        _icon: hm.get(&String::from("Icon")).cloned(),
+                        path: hm
+                            .get(&String::from("Path"))
+                            .cloned()
+                            .map(|s| PathBuf::from(s)),
+                        hidden: hm
+                            .get(&String::from("Hidden"))
+                            .map(|s| s.parse::<bool>().ok())
+                            .flatten()
+                            .unwrap_or(false)
+                            | hm.get(&String::from("NoDisplay"))
+                                .map(|s| s.parse::<bool>().ok())
+                                .flatten()
+                                .unwrap_or(false),
+                    })
+                } else {
+                    Err(())
+                }
+            } else {
+                Err(())
+            }
+        } else {
+            Err(())
+        }
+    } // }}}
+}
+
 fn parse_color(s: &str) -> Result<Color32, String> {
     colcon::hex_to_irgb(s).map(|rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
 }
+
+// Reference:
+// https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+// https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html
 
 fn get_binaries() -> HashMap<String, PathBuf> {
     // {{{
     let mut binaries = HashMap::new();
     if let Ok(paths) = env::var("PATH") {
         for directory in paths.split(':') {
-            if let Ok(entries) = std::fs::read_dir(directory) {
+            if let Ok(entries) = read_dir(directory) {
                 for entry in entries {
                     if let Ok(entry) = entry {
                         if let Ok(meta) = entry.metadata() {
@@ -52,6 +117,44 @@ fn get_binaries() -> HashMap<String, PathBuf> {
         }
     }
     binaries
+} // }}}
+
+fn get_applications(include_hidden: bool) -> HashMap<String, Application> {
+    // {{{
+    let mut paths = Vec::<PathBuf>::new();
+    // add them in backwards because the desktop entry spec
+    // states it should return the first found
+    paths.extend(
+        env::var("XDG_DATA_DIRS")
+            .unwrap_or(String::from("/usr/local/share/:/usr/share/"))
+            .split(':')
+            .rev()
+            .map(|s| s.into()),
+    );
+    paths.push(
+        env::var_os("XDG_DATA_HOME")
+            .unwrap_or(OsString::from(env::var("HOME").unwrap() + "/.local/share"))
+            .into(),
+    );
+
+    let mut result = HashMap::new();
+
+    for mut path in paths {
+        path.push("applications");
+        if let Ok(entries) = read_dir(path) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    if let Ok(application) = Application::from_path(entry.path()) {
+                        if include_hidden | !application.hidden {
+                            result.insert(application.name.clone(), application);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
 } // }}}
 
 fn scale_factor() -> f32 {
@@ -80,9 +183,9 @@ fn cache_file(name: &str) -> PathBuf {
 
 fn cache_get(name: &str) -> Vec<(usize, String)> {
     let mut result = Vec::new();
-    if let Ok(bytes) = read(cache_file(name)) {
+    if let Ok(data) = read_to_string(cache_file(name)) {
         let re = Regex::new(r"^(\d+) +(.+)$").unwrap();
-        for line in String::from_utf8_lossy(&bytes).lines() {
+        for line in data.lines() {
             if let Some(captures) = re.captures(line.trim()) {
                 result.push((
                     captures[1].parse::<usize>().unwrap(),
@@ -293,7 +396,7 @@ impl Linch {
 
     fn compile(&mut self) {
         if !self.literal {
-            self.input_compiled = Regex::new(&self.input).ok()
+            self.input_compiled = Regex::new(&(String::from("(?i)") + &self.input)).ok()
         }
     }
 
@@ -504,7 +607,11 @@ enum LinchCmd {
     /// Launch a binary directly. Scans PATH by default
     Bin,
     /// Launch a desktop application.
-    App,
+    App {
+        /// Show all entries, including hidden and technical
+        #[arg(long)]
+        all: bool,
+    },
     // Big maybe. If it's easy enough then sure, else no
     // /// dmenu compatibility mode
     // Dmenu,
@@ -623,7 +730,6 @@ fn response(items: Vec<String>, cache: String, args: LinchArgs) -> Option<String
 fn main() {
     // {{{
     let args = LinchArgs::parse();
-
     match args.command {
         LinchCmd::Bin => {
             let items: Vec<String> = get_binaries().keys().cloned().collect();
@@ -642,6 +748,48 @@ fn main() {
                 };
             }
         }
-        LinchCmd::App => unimplemented!("Desktop application support not yet implemented"),
+        LinchCmd::App { all } => {
+            let applications = get_applications(all);
+            if let Some(result) = response(
+                applications.keys().cloned().collect(),
+                args.cache.clone().unwrap_or(String::from("app")),
+                args,
+            ) {
+                let app = &applications[&result];
+                let mut errs;
+                if let Err(err_gtk) = std::process::Command::new("gtk-launch")
+                    .arg(app.file.file_stem().unwrap())
+                    .spawn()
+                {
+                    errs = format!("Could not start app through gtk-launch: {}", err_gtk);
+                    if let Err(err_dex) = std::process::Command::new("dex").arg(&app.file).spawn() {
+                        errs += &format!("\nCould not start app through dex: {}", err_dex);
+                        if let Some(exec) = app.exec.as_ref() {
+                            let items = exec.split_whitespace().collect::<Vec<&str>>();
+                            let mut command = if let Some(mut path) = app.path.clone() {
+                                path.push(items[0]);
+                                std::process::Command::new(path)
+                            } else {
+                                std::process::Command::new(items[0])
+                            };
+                            if let Some(args) = items.get(1..) {
+                                command.args(args);
+                            }
+                            if let Err(err_exec) = command.spawn() {
+                                eprintln!(
+                                    "{}\nStarting application directly failed: {}",
+                                    errs, err_exec
+                                );
+                            }
+                        }
+                        eprintln!(
+                            "{}\nCould not read Exec field from {}",
+                            errs,
+                            app.file.to_string_lossy()
+                        );
+                    }
+                }
+            }
+        }
     };
 } // }}}
