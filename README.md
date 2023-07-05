@@ -1,5 +1,5 @@
 # linch 0.1.0
-Cross-desktop application launcher made with egui
+Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
 
