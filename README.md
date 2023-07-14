@@ -1,4 +1,4 @@
-# linch 0.1.0
+# linch 0.2.0
 Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
@@ -7,6 +7,7 @@ Cross-desktop application launcher made with ~~iced~~ egui
   * Launch apps or run commands on X11 and Wayland
   * Search with regular expressions or plain text
   * Easy custom themes
+  * Icons
   * Pure Rust, very portable.
 
 ## Usage
@@ -18,8 +19,7 @@ Cross-desktop application launcher made with ~~iced~~ egui
 
 You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
 ## Goals for 1.0
-  * Improved desktop application support
-    * Icons
+  * Finalize desktop application support
     * Descriptions?
     * Actions?
   * Possible dmenu mode
