@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
     env,
-    ffi::OsString,
-    fs::{read_to_string, remove_file, write},
+    ffi::{OsStr, OsString},
+    fs::{read_to_string, remove_file, write, File},
+    io::Read,
     num::NonZeroUsize,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
@@ -20,24 +21,40 @@ use eframe::{
     epaint::{FontId, Rounding, Shadow, Vec2},
     App, NativeOptions,
 };
+use egui_extras::{image::FitTo, RetainedImage};
 
 use clap::{Parser, Subcommand};
-use lexical_sort::{natural_lexical_cmp, StringSort};
+use lexical_sort::natural_lexical_cmp;
 use regex::Regex;
 use walkdir::WalkDir;
 
-#[derive(Debug, Clone)]
-struct Application {
+#[derive(Clone, PartialEq, Eq)]
+struct Item {
     file: PathBuf,
     name: String,
     exec: Option<String>,
     path: Option<PathBuf>,
-    _icon: Option<String>,
+    icon: Option<String>,
     hidden: bool,
 }
 
-impl Application {
+impl Item {
     fn from_path(path: PathBuf) -> Result<Self, ()> {
+        let fname = path
+            .file_name()
+            .map(|osstr| osstr.to_string_lossy().to_string());
+        fname
+            .map(|name| Self {
+                file: path,
+                name,
+                path: None,
+                exec: None,
+                icon: None,
+                hidden: false,
+            })
+            .ok_or(())
+    }
+    fn from_desktop(path: PathBuf) -> Result<Self, ()> {
         // {{{
         if path.extension() == Some(OsString::from("desktop").as_os_str()) {
             if let Ok(data) = read_to_string(&path) {
@@ -59,7 +76,7 @@ impl Application {
                         file: path,
                         name: name.to_string(),
                         exec: hm.get(&String::from("Exec")).cloned(),
-                        _icon: hm.get(&String::from("Icon")).cloned(),
+                        icon: hm.get(&String::from("Icon")).cloned(),
                         path: hm
                             .get(&String::from("Path"))
                             .cloned()
@@ -86,6 +103,18 @@ impl Application {
     } // }}}
 }
 
+impl AsRef<str> for Item {
+    fn as_ref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
 fn parse_color(s: &str) -> Result<Color32, String> {
     colcon::hex_to_irgb(s).map(|rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
 }
@@ -94,9 +123,9 @@ fn parse_color(s: &str) -> Result<Color32, String> {
 // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 // https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html
 
-fn get_binaries() -> HashMap<String, PathBuf> {
+fn get_binaries() -> Vec<Item> {
     // {{{
-    let mut binaries = HashMap::new();
+    let mut binaries = Vec::new();
     if let Ok(paths) = env::var("PATH") {
         for directory in paths.split(':') {
             for entry in WalkDir::new(directory).follow_links(true) {
@@ -105,8 +134,8 @@ fn get_binaries() -> HashMap<String, PathBuf> {
                         let bit = 0b1;
                         if !meta.is_dir() && meta.permissions().mode() & bit == bit {
                             let path = entry.into_path();
-                            if let Some(fname) = path.file_name() {
-                                binaries.insert(fname.to_string_lossy().to_string(), path);
+                            if let Ok(item) = Item::from_path(path) {
+                                binaries.push(item);
                             }
                         }
                     }
@@ -117,7 +146,7 @@ fn get_binaries() -> HashMap<String, PathBuf> {
     binaries
 } // }}}
 
-fn get_applications(include_hidden: bool) -> HashMap<String, Application> {
+fn get_applications(include_hidden: bool) -> Vec<Item> {
     // {{{
     let mut paths = Vec::<PathBuf>::new();
     // add them in backwards because the desktop entry spec
@@ -135,15 +164,15 @@ fn get_applications(include_hidden: bool) -> HashMap<String, Application> {
             .into(),
     );
 
-    let mut result = HashMap::new();
+    let mut result = Vec::new();
 
     for mut path in paths {
         path.push("applications");
         for entry in WalkDir::new(path).follow_links(true) {
             if let Ok(entry) = entry {
-                if let Ok(application) = Application::from_path(entry.into_path()) {
-                    if include_hidden | !application.hidden {
-                        result.insert(application.name.clone(), application);
+                if let Ok(item) = Item::from_desktop(entry.into_path()) {
+                    if include_hidden | !item.hidden {
+                        result.push(item);
                     }
                 }
             }
@@ -152,6 +181,45 @@ fn get_applications(include_hidden: bool) -> HashMap<String, Application> {
 
     result
 } // }}}
+
+fn get_icon_loc(name: &str) -> Option<PathBuf> {
+    let mut buf: PathBuf;
+    for f in [
+        name.to_string(),
+        format!("/usr/share/icons/hicolor/scalable/apps/{}.svg", name),
+        format!(
+            "/usr/share/icons/hicolor/symbolic/apps/{}-symbolic.svg",
+            name
+        ),
+        format!("/usr/share/icons/hicolor/64x64/apps/{}.png", name),
+        format!("/usr/share/icons/hicolor/128x128/apps/{}.png", name),
+        format!("/usr/share/icons/hicolor/256x256/apps/{}.png", name),
+        format!("/usr/share/icons/hicolor/32x32/apps/{}.png", name),
+    ] {
+        buf = PathBuf::from(f);
+        if buf.is_file() {
+            return Some(buf);
+        }
+    }
+    // fall back to scanning
+    // let mut osname = OsString::new();
+    // osname.push(name);
+    // osname.push(".png");
+    let osname = Some(OsStr::new(name));
+    let png = Some(OsStr::new("png"));
+    let svg = Some(OsStr::new("svg"));
+    for entry in WalkDir::new("/usr/share/icons/hicolor")
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().file_stem() == osname)
+        .filter(|e| e.path().extension() == png || e.path().extension() == svg)
+    {
+        println!("{}", entry.path().display());
+        return Some(entry.path().to_owned());
+    }
+    None
+}
 
 fn scale_factor() -> f32 {
     if let Ok(val) = env::var("GDK_DPI_SCALE") {
@@ -205,39 +273,39 @@ fn cache_set(name: &str, lines: Vec<(usize, String)>) {
     .unwrap();
 }
 
-fn cache_apply(name: &str, items: &mut [String]) {
+fn cache_apply(name: &str, items: &mut [Item]) {
     let map: HashMap<String, usize> =
         HashMap::from_iter(cache_get(name).into_iter().map(|(n, s)| (s, n)));
     items.sort_by(|a, b| {
-        map.get(a)
+        map.get(&a.name.clone())
             .unwrap_or(&0)
-            .cmp(map.get(b).unwrap_or(&0))
+            .cmp(map.get(&b.name.clone()).unwrap_or(&0))
             .reverse()
-            .then(natural_lexical_cmp(a, b))
+            .then(natural_lexical_cmp(a.as_ref(), b.as_ref()))
     });
 }
 
-fn cache_add(name: &str, item: &str) {
+fn cache_add(name: &str, item: &Item) {
     let mut cache = cache_get(name);
     let mut set = false;
     for line in cache.iter_mut() {
-        if line.1 == item {
+        if line.1 == item.as_ref() {
             line.0 = line.0.saturating_add(1); //optimistic lol
             set = true;
         }
     }
     if !set {
-        cache.push((1, item.to_string()))
+        cache.push((1, item.name.clone()))
     }
     cache_set(name, cache);
 }
 
-fn cache_del(name: &str, item: &str) {
+fn cache_del(name: &str, item: &Item) {
     cache_set(
         name,
         cache_get(name)
             .into_iter()
-            .filter(|(_n, s)| s != item)
+            .filter(|(_n, s)| s != item.as_ref())
             .collect(),
     );
 }
@@ -252,9 +320,10 @@ struct Linch {
     scroll: usize,
     hover: Option<usize>,
     focused: bool,
+    images: HashMap<String, RetainedImage>,
 
-    response: Arc<Mutex<Option<String>>>,
-    items: Vec<String>,
+    response: Arc<Mutex<Option<Item>>>,
+    items: Vec<Item>,
     cache: String,
     prompt: String,
     columns: usize,
@@ -265,14 +334,15 @@ struct Linch {
     scale: f32,
     literal: bool,
     exit_unfocus: bool,
+    icons: bool,
 }
 
 impl Linch {
     // {{{
     fn new(
         cc: &eframe::CreationContext<'_>,
-        mut items: Vec<String>,
-        response: Arc<Mutex<Option<String>>>,
+        mut items: Vec<Item>,
+        response: Arc<Mutex<Option<Item>>>,
         cache: String,
         prompt: String,
         columns: usize,
@@ -284,6 +354,7 @@ impl Linch {
         scale: f32,
         literal: bool,
         exit_unfocus: bool,
+        icons: bool,
     ) -> Self {
         let style = cc.egui_ctx.style().as_ref().clone();
         cc.egui_ctx.set_style(Style {
@@ -339,7 +410,35 @@ impl Linch {
         if !cache.is_empty() {
             cache_apply(&cache, &mut items);
         } else {
-            items.string_sort_unstable(natural_lexical_cmp)
+            items.sort_unstable_by(|a, b| natural_lexical_cmp(a.as_ref(), b.as_ref()))
+        }
+
+        let mut images = HashMap::new();
+        if icons {
+            for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
+                if !images.contains_key(icon) {
+                    if let Some(path) = get_icon_loc(&icon) {
+                        if let Ok(mut file) = File::open(&path) {
+                            let mut data = Vec::new();
+                            if file.read_to_end(&mut data).is_ok() {
+                                if path.extension() == Some(&OsStr::new("svg")) {
+                                    if let Ok(ri) = RetainedImage::from_svg_bytes_with_size(
+                                        icon,
+                                        &data,
+                                        FitTo::Height(64),
+                                    ) {
+                                        images.insert(icon.to_string(), ri);
+                                    }
+                                } else {
+                                    if let Ok(ri) = RetainedImage::from_image_bytes(icon, &data) {
+                                        images.insert(icon.to_string(), ri);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Self {
@@ -350,6 +449,7 @@ impl Linch {
             scroll: 0,
             hover: None,
             focused: false,
+            images,
 
             items,
             response,
@@ -363,20 +463,21 @@ impl Linch {
             scale,
             literal,
             exit_unfocus,
+            icons,
         }
     }
 
-    fn items_filter(&self) -> impl Iterator<Item = &String> {
+    fn items_filter(&self) -> impl Iterator<Item = &Item> {
         self.items.iter().filter(|s| {
             if let Some(re) = &self.input_compiled {
-                re.is_match(s)
+                re.is_match(s.as_ref())
             } else {
-                s.starts_with(&self.input)
+                s.as_ref().starts_with(&self.input)
             }
         })
     }
 
-    fn items_filtered(&self, count: usize, skip: usize) -> Vec<String> {
+    fn items_filtered(&self, count: usize, skip: usize) -> Vec<Item> {
         self.items_filter()
             .skip(skip)
             .take(count)
@@ -384,7 +485,7 @@ impl Linch {
             .collect()
     }
 
-    fn selected(&self) -> Option<String> {
+    fn selected(&self) -> Option<Item> {
         self.items_filter()
             .nth(self.index + self.scroll * self.rows * self.columns)
             .cloned()
@@ -557,6 +658,27 @@ impl App for Linch {
                                         .fill(fill)
                                         .inner_margin(2.0 * self.scale)
                                         .show(ui, |ui| {
+                                            let mut shrink2 = Vec2 { x: 0.0, y: 0.0 };
+                                            if self.icons {
+                                                shrink2 = Vec2 {
+                                                    x: ui.available_height(),
+                                                    y: 0.0,
+                                                };
+                                                match i
+                                                    .icon
+                                                    .as_ref()
+                                                    .map(|i| self.images.get(i))
+                                                    .flatten()
+                                                {
+                                                    Some(image) => drop(ui.image(
+                                                        image.texture_id(ui.ctx()),
+                                                        Vec2::splat(ui.available_height()),
+                                                    )),
+                                                    None => drop(ui.allocate_space(Vec2::splat(
+                                                        ui.available_height(),
+                                                    ))),
+                                                }
+                                            }
                                             // manually paint text to avoid overallocation
                                             ui.allocate_painter(
                                                 ui.available_size(),
@@ -564,7 +686,7 @@ impl App for Linch {
                                             )
                                             .1
                                             .text(
-                                                ui.max_rect().left_center(),
+                                                ui.max_rect().shrink2(shrink2).left_center(),
                                                 Align2::LEFT_CENTER,
                                                 i,
                                                 FontId::proportional(font),
@@ -679,9 +801,9 @@ struct LinchArgs {
     clear_cache: bool,
 } // }}}
 
-fn response(items: Vec<String>, cache: String, args: LinchArgs) -> Option<String> {
+fn response(items: Vec<Item>, cache: String, args: LinchArgs, icons: bool) -> Option<Item> {
     // {{{
-    let result = Arc::new(Mutex::new(None));
+    let result: Arc<Mutex<Option<Item>>> = Arc::new(Mutex::new(None));
     let res_send = result.clone();
     let scale = args.scale.unwrap_or(scale_factor());
     if args.clear_cache {
@@ -714,6 +836,7 @@ fn response(items: Vec<String>, cache: String, args: LinchArgs) -> Option<String
                 scale,
                 args.literal,
                 args.exit_unfocus,
+                icons,
             ))
         }),
     )
@@ -728,13 +851,14 @@ fn main() {
     let args = LinchArgs::parse();
     match args.command {
         LinchCmd::Bin => {
-            let items: Vec<String> = get_binaries().keys().cloned().collect();
-            if let Some(result) = response(
+            let items = get_binaries();
+            if let Some(item) = response(
                 items,
                 args.cache.clone().unwrap_or(String::from("bin")),
                 args,
+                false,
             ) {
-                let mut command = std::process::Command::new(result);
+                let mut command = std::process::Command::new(item.as_ref());
                 if let Err(e) = command.spawn() {
                     panic!(
                         "Could not start process {}\n{}",
@@ -745,24 +869,25 @@ fn main() {
             }
         }
         LinchCmd::App { all } => {
-            let applications = get_applications(all);
-            if let Some(result) = response(
-                applications.keys().cloned().collect(),
+            let items = get_applications(all);
+            if let Some(item) = response(
+                items,
                 args.cache.clone().unwrap_or(String::from("app")),
                 args,
+                true,
             ) {
-                let app = &applications[&result];
                 let mut errs;
                 if let Err(err_gtk) = std::process::Command::new("gtk-launch")
-                    .arg(app.file.file_stem().unwrap())
+                    .arg(item.file.file_stem().unwrap())
                     .spawn()
                 {
                     errs = format!("Could not start app through gtk-launch: {}", err_gtk);
-                    if let Err(err_dex) = std::process::Command::new("dex").arg(&app.file).spawn() {
+                    if let Err(err_dex) = std::process::Command::new("dex").arg(&item.file).spawn()
+                    {
                         errs += &format!("\nCould not start app through dex: {}", err_dex);
-                        if let Some(exec) = app.exec.as_ref() {
+                        if let Some(exec) = item.exec.as_ref() {
                             let items = exec.split_whitespace().collect::<Vec<&str>>();
-                            let mut command = if let Some(mut path) = app.path.clone() {
+                            let mut command = if let Some(mut path) = item.path.clone() {
                                 path.push(items[0]);
                                 std::process::Command::new(path)
                             } else {
@@ -781,7 +906,7 @@ fn main() {
                         eprintln!(
                             "{}\nCould not read Exec field from {}",
                             errs,
-                            app.file.to_string_lossy()
+                            item.file.to_string_lossy()
                         );
                     }
                 }
