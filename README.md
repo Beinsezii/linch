@@ -5,9 +5,9 @@ Cross-desktop application launcher made with ~~iced~~ egui
 
 ## Features
   * Launch apps or run commands on X11 and Wayland
+    * Desktop entries also show icons
   * Search with regular expressions or plain text
   * Easy custom themes
-  * Icons
   * Pure Rust, very portable.
 
 ## Usage
