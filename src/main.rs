@@ -183,41 +183,53 @@ fn get_applications(include_hidden: bool) -> Vec<Item> {
 } // }}}
 
 fn get_icon_loc(name: &str) -> Option<PathBuf> {
-    let mut buf: PathBuf;
+    // on my system covers every app that doesn't have a stupid location
     for f in [
         name.to_string(),
+        // Prefer Papirus SVGs
+        format!("/usr/share/icons/Papirus/64x64/apps/{}.svg", name),
         format!("/usr/share/icons/hicolor/scalable/apps/{}.svg", name),
-        format!(
-            "/usr/share/icons/hicolor/symbolic/apps/{}-symbolic.svg",
-            name
-        ),
+        // HiColor PNGs
         format!("/usr/share/icons/hicolor/64x64/apps/{}.png", name),
         format!("/usr/share/icons/hicolor/128x128/apps/{}.png", name),
         format!("/usr/share/icons/hicolor/256x256/apps/{}.png", name),
-        format!("/usr/share/icons/hicolor/32x32/apps/{}.png", name),
+        // Check other locations
+        format!("/usr/share/icons/Papirus/64x64/devices/{}.svg", name),
     ] {
-        buf = PathBuf::from(f);
+        let buf = PathBuf::from(f);
         if buf.is_file() {
             return Some(buf);
         }
     }
-    // fall back to scanning
-    // let mut osname = OsString::new();
-    // osname.push(name);
-    // osname.push(".png");
+    // fall back to scanning. Don't like this, kind of want to remove but idk how other
+    // distros'/themes' layouts may differ
     let osname = Some(OsStr::new(name));
     let png = Some(OsStr::new("png"));
     let svg = Some(OsStr::new("svg"));
+    // No Papirus scannign since its layout is super standardized and there's like a million files
     for entry in WalkDir::new("/usr/share/icons/hicolor")
-        .follow_links(true)
         .into_iter()
+        .chain(WalkDir::new("/usr/share/icons/Adwaita"))
+        // scan all other themes as last resort
+        .chain(
+            WalkDir::new("/usr/share/icons")
+                .into_iter()
+                .filter_entry(|e| {
+                    e.file_name() != "Papirus"
+                        && e.file_name() != "hicolor"
+                        && e.file_name() != "Adwaita"
+                        // also skip symbolic icons. I'm not gonna support them
+                        && e.file_name() != "symbolic"
+                }),
+        )
         .filter_map(|e| e.ok())
         .filter(|e| e.path().file_stem() == osname)
         .filter(|e| e.path().extension() == png || e.path().extension() == svg)
     {
-        println!("{}", entry.path().display());
+        // println!("### FOUND {} AT {}", name, entry.path().display());
         return Some(entry.path().to_owned());
     }
+    // println!("### COULD NOT FIND {}", name);
     None
 }
 
@@ -414,6 +426,7 @@ impl Linch {
         }
 
         let mut images = HashMap::new();
+        // let now = std::time::Instant::now();
         if icons {
             for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
                 if !images.contains_key(icon) {
@@ -440,6 +453,10 @@ impl Linch {
                 }
             }
         }
+        // println!(
+        //     "Icons loaded in {}ms",
+        //     (std::time::Instant::now() - now).as_millis()
+        // );
 
         Self {
             input: String::new(),
