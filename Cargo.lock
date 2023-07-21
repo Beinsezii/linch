@@ -707,9 +707,9 @@ dependencies = [
 
 [[package]]
 name = "colcon"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e1daa192c341da09c124e9c6e5c1120a3ec212c3d3db93382908e4a42562e33"
+checksum = "b04a1add16d659dc668f58514b8da289b604adc840745651f40e26f4c1f9b2df"
 
 [[package]]
 name = "color_quant"
@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "linch"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "clap",
  "colcon",

@@ -245,7 +245,7 @@ fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
 
     let l = target[0];
     let c = target[1];
-    let h = target[2] + 180.0;
+    let h = target[2];
 
     // set hue
     target[2] = reference[2];
