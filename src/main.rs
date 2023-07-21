@@ -66,7 +66,7 @@ impl Item {
                 for line in data.lines() {
                     if line.trim() == "[Desktop Entry]" {
                         start = true;
-                    } else if line.trim().starts_with("[Desktop") {
+                    } else if line.trim().starts_with("[") {
                         break;
                     } else if start {
                         if let Some((a, b)) = line.split_once("=") {

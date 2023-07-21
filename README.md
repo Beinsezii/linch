@@ -1,4 +1,4 @@
-# linch 0.2.3
+# linch 0.2.4
 Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
