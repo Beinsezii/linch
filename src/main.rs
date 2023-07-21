@@ -273,15 +273,15 @@ fn monochromatize_svg(data: &mut [u8], color: Color32) {
     let color = color.to_normalized_gamma_f32();
     let color = [color[0], color[1], color[2]];
     if let Ok(svg) = std::str::from_utf8_mut(data) {
-        let mut indicies: Vec<(usize, usize)> =
-            svg.match_indices("fill:#").map(|(i, _)| (i, 5)).collect();
-        indicies.append(
-            &mut svg
-                .match_indices("stroke:#")
-                .map(|(i, _)| (i, 7))
-                .collect::<Vec<(usize, usize)>>(),
-        );
-        // indicies.append(&mut svg.match_indices("stop-color=\"#").map(|(i, _)| (i, 12)).collect::<Vec<(usize, usize)>>());
+        let indicies: Vec<(usize, usize)> = svg
+            .match_indices("fill:#")
+            .chain(svg.match_indices("stroke:#"))
+            .chain(svg.match_indices("color:#"))
+            .chain(svg.match_indices("fill=\"#"))
+            .chain(svg.match_indices("stroke=\"#"))
+            .chain(svg.match_indices("color=\"#"))
+            .map(|(i, s)| (i, s.len() - 1))
+            .collect();
 
         for (i, o) in indicies.into_iter() {
             unsafe {
