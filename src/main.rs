@@ -18,10 +18,13 @@ use eframe::{
         Visuals,
     },
     emath::Align2,
-    epaint::{FontId, Rounding, Shadow, Vec2},
+    epaint::{FontId, Rgba, Rounding, Shadow, Vec2},
     App, NativeOptions,
 };
-use egui_extras::{image::FitTo, RetainedImage};
+use egui_extras::{
+    image::{load_image_bytes, FitTo},
+    RetainedImage,
+};
 
 use clap::{Parser, Subcommand};
 use lexical_sort::natural_lexical_cmp;
@@ -237,8 +240,8 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
 fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
     // {{{
     let mut reference = reference;
-    colcon::convert_space(colcon::Space::SRGB, colcon::Space::LCH, &mut reference);
-    colcon::convert_space(colcon::Space::SRGB, colcon::Space::LCH, target);
+    colcon::convert_space(colcon::Space::LRGB, colcon::Space::LCH, &mut reference);
+    colcon::convert_space(colcon::Space::LRGB, colcon::Space::LCH, target);
 
     let l = target[0];
     let c = target[1];
@@ -265,12 +268,12 @@ fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
 
     target[0] = l * ls + ht * 100.0 * cs;
 
-    colcon::convert_space(colcon::Space::LCH, colcon::Space::SRGB, target);
+    colcon::convert_space(colcon::Space::LCH, colcon::Space::LRGB, target);
 } // }}}
 
 fn monochromatize_svg(data: &mut [u8], color: Color32) {
     // {{{
-    let color = color.to_normalized_gamma_f32();
+    let color = Rgba::from(color);
     let color = [color[0], color[1], color[2]];
     if let Ok(svg) = std::str::from_utf8_mut(data) {
         let indicies: Vec<(usize, usize)> = svg
@@ -292,7 +295,9 @@ fn monochromatize_svg(data: &mut [u8], color: Color32) {
                     } else {
                         continue;
                     });
+                colcon::srgb_to_lrgb(&mut fill);
                 monochromatize_pixel(color, &mut fill);
+                colcon::lrgb_to_srgb(&mut fill);
                 let fill = colcon::irgb_to_hex(colcon::srgb_to_irgb(fill));
                 slice
                     .as_bytes_mut()
@@ -499,6 +504,8 @@ impl Linch {
 
         let mut images = HashMap::new();
         // let now = std::time::Instant::now();
+        let acc_pixel = Rgba::from(acc);
+        let acc_pixel = [acc_pixel[0], acc_pixel[1], acc_pixel[2]];
         if icons {
             for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
                 if !images.contains_key(icon) {
@@ -518,8 +525,21 @@ impl Linch {
                                         images.insert(icon.to_string(), ri);
                                     }
                                 } else {
-                                    if let Ok(ri) = RetainedImage::from_image_bytes(icon, &data) {
-                                        images.insert(icon.to_string(), ri);
+                                    if let Ok(mut ci) = load_image_bytes(&data) {
+                                        ci.pixels.iter_mut().for_each(|pixel| {
+                                            let rgb = Rgba::from(*pixel);
+                                            let a = rgb[3];
+                                            let mut rgb = [rgb[0], rgb[1], rgb[2]];
+                                            monochromatize_pixel(acc_pixel, &mut rgb);
+                                            *pixel = Rgba::from_rgba_premultiplied(
+                                                rgb[0], rgb[1], rgb[2], a,
+                                            )
+                                            .into()
+                                        });
+                                        images.insert(
+                                            icon.to_string(),
+                                            RetainedImage::from_color_image(icon, ci),
+                                        );
                                     }
                                 }
                             }
@@ -822,7 +842,8 @@ enum LinchCmd {
         #[arg(long)]
         all: bool,
 
-        /// Attempt to recolor the icons into a monochrome version based on accent
+        /// Recolor icons to monochrome style accent. Strongly recommended to have a scalable
+        /// theme, as PNGs take 10x longer to recolor than SVGs
         #[arg(long)]
         monochrome: bool,
     },
