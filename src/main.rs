@@ -183,6 +183,7 @@ fn get_applications(include_hidden: bool) -> Vec<Item> {
 } // }}}
 
 fn get_icon_loc(name: &str) -> Option<PathBuf> {
+    // {{{
     // on my system covers every app that doesn't have a stupid location
     for f in [
         name.to_string(),
@@ -231,7 +232,77 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
     }
     // println!("### COULD NOT FIND {}", name);
     None
-}
+} // }}}
+
+fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
+    // {{{
+    let mut reference = reference;
+    colcon::convert_space(colcon::Space::SRGB, colcon::Space::LCH, &mut reference);
+    colcon::convert_space(colcon::Space::SRGB, colcon::Space::LCH, target);
+
+    let l = target[0];
+    let c = target[1];
+    let h = target[2] + 180.0;
+
+    // set hue
+    target[2] = reference[2];
+
+    // adjust chroma up to 50% based on proximity to middle gray
+    target[1] = (c + 100.0 - (l - 50.0).abs() * 2.0) / 2.0;
+
+    // increase brightness to suit chroma using the
+    // world's worst Helmholtz–Kohlrausch effect approximation
+    let ht = if h <= 240.0 {
+        // 0.0 @ green, 1.0 @ light blue or magenta
+        (120.0 - h).abs() / 120.0
+    } else {
+        // 0.5 @ purple, 1.0 @ light blue or magenta
+        (1.0 + (60.0 - (h - 240.0)).abs() / 60.0) / 2.0
+    };
+
+    let cs = (c - l).max(0.0) / 100.0;
+    let ls = 1.0 - cs;
+
+    target[0] = l * ls + ht * 100.0 * cs;
+
+    colcon::convert_space(colcon::Space::LCH, colcon::Space::SRGB, target);
+} // }}}
+
+fn monochromatize_svg(data: &mut [u8], color: Color32) {
+    // {{{
+    let color = color.to_normalized_gamma_f32();
+    let color = [color[0], color[1], color[2]];
+    if let Ok(svg) = std::str::from_utf8_mut(data) {
+        let mut indicies: Vec<(usize, usize)> =
+            svg.match_indices("fill:#").map(|(i, _)| (i, 5)).collect();
+        indicies.append(
+            &mut svg
+                .match_indices("stroke:#")
+                .map(|(i, _)| (i, 7))
+                .collect::<Vec<(usize, usize)>>(),
+        );
+        // indicies.append(&mut svg.match_indices("stop-color=\"#").map(|(i, _)| (i, 12)).collect::<Vec<(usize, usize)>>());
+
+        for (i, o) in indicies.into_iter() {
+            unsafe {
+                let slice = svg.get_unchecked_mut(i + o..i + 7 + o);
+                let mut fill =
+                    colcon::irgb_to_srgb(if let Ok(pixel) = colcon::hex_to_irgb(slice) {
+                        pixel
+                    } else {
+                        continue;
+                    });
+                monochromatize_pixel(color, &mut fill);
+                let fill = colcon::irgb_to_hex(colcon::srgb_to_irgb(fill));
+                slice
+                    .as_bytes_mut()
+                    .iter_mut()
+                    .zip(fill.as_bytes().into_iter())
+                    .for_each(|(a, b)| *a = *b);
+            }
+        }
+    }
+} // }}}
 
 fn scale_factor() -> f32 {
     if let Ok(val) = env::var("GDK_DPI_SCALE") {
@@ -367,6 +438,7 @@ impl Linch {
         literal: bool,
         exit_unfocus: bool,
         icons: bool,
+        monochrome: bool,
     ) -> Self {
         let style = cc.egui_ctx.style().as_ref().clone();
         cc.egui_ctx.set_style(Style {
@@ -435,6 +507,9 @@ impl Linch {
                             let mut data = Vec::new();
                             if file.read_to_end(&mut data).is_ok() {
                                 if path.extension() == Some(&OsStr::new("svg")) {
+                                    if monochrome {
+                                        monochromatize_svg(&mut data, acc)
+                                    };
                                     if let Ok(ri) = RetainedImage::from_svg_bytes_with_size(
                                         icon,
                                         &data,
@@ -746,6 +821,10 @@ enum LinchCmd {
         /// Show all entries, including hidden and technical
         #[arg(long)]
         all: bool,
+
+        /// Attempt to recolor the icons into a monochrome version based on accent
+        #[arg(long)]
+        monochrome: bool,
     },
     // Big maybe. If it's easy enough then sure, else no
     // /// dmenu compatibility mode
@@ -818,7 +897,13 @@ struct LinchArgs {
     clear_cache: bool,
 } // }}}
 
-fn response(items: Vec<Item>, cache: String, args: LinchArgs, icons: bool) -> Option<Item> {
+fn response(
+    items: Vec<Item>,
+    cache: String,
+    args: LinchArgs,
+    icons: bool,
+    monochrome: bool,
+) -> Option<Item> {
     // {{{
     let result: Arc<Mutex<Option<Item>>> = Arc::new(Mutex::new(None));
     let res_send = result.clone();
@@ -854,6 +939,7 @@ fn response(items: Vec<Item>, cache: String, args: LinchArgs, icons: bool) -> Op
                 args.literal,
                 args.exit_unfocus,
                 icons,
+                monochrome,
             ))
         }),
     )
@@ -874,6 +960,7 @@ fn main() {
                 args.cache.clone().unwrap_or(String::from("bin")),
                 args,
                 false,
+                false,
             ) {
                 let mut command = std::process::Command::new(item.as_ref());
                 if let Err(e) = command.spawn() {
@@ -885,13 +972,14 @@ fn main() {
                 };
             }
         }
-        LinchCmd::App { all } => {
+        LinchCmd::App { all, monochrome } => {
             let items = get_applications(all);
             if let Some(item) = response(
                 items,
                 args.cache.clone().unwrap_or(String::from("app")),
                 args,
                 true,
+                monochrome,
             ) {
                 let mut errs;
                 if let Err(err_gtk) = std::process::Command::new("gtk-launch")
