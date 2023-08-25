@@ -1002,38 +1002,43 @@ fn main() {
                 true,
                 monochrome,
             ) {
-                let mut errs;
-                if let Err(err_gtk) = std::process::Command::new("gtk-launch")
+                for launcher in [
+                    std::process::Command::new("dex").arg(&item.file),
+                    std::process::Command::new("gio")
+                        .arg("launch")
+                        .arg(&item.file),
+                    std::process::Command::new("exo-open").arg(&item.file),
+                ] {
+                    if launcher.spawn().is_ok() {
+                        return;
+                    }
+                }
+                eprintln!("All featured launchers failed. Falling back to gtk-launch");
+                match std::process::Command::new("gtk-launch")
                     .arg(item.file.file_stem().unwrap())
                     .spawn()
                 {
-                    errs = format!("Could not start app through gtk-launch: {}", err_gtk);
-                    if let Err(err_dex) = std::process::Command::new("dex").arg(&item.file).spawn()
-                    {
-                        errs += &format!("\nCould not start app through dex: {}", err_dex);
-                        if let Some(exec) = item.exec.as_ref() {
-                            let items = exec.split_whitespace().collect::<Vec<&str>>();
-                            let mut command = if let Some(mut path) = item.path.clone() {
-                                path.push(items[0]);
-                                std::process::Command::new(path)
-                            } else {
-                                std::process::Command::new(items[0])
-                            };
-                            if let Some(args) = items.get(1..) {
-                                command.args(args);
-                            }
-                            if let Err(err_exec) = command.spawn() {
-                                eprintln!(
-                                    "{}\nStarting application directly failed: {}",
-                                    errs, err_exec
-                                );
-                            }
+                    Ok(mut child) => {
+                        if child.wait().unwrap().success() {
+                            return;
                         }
-                        eprintln!(
-                            "{}\nCould not read Exec field from {}",
-                            errs,
-                            item.file.to_string_lossy()
-                        );
+                    }
+                    Err(e) => eprintln!("{}", e),
+                }
+                eprintln!("Falling back to manual desktop entry launching");
+                if let Some(exec) = item.exec.as_ref() {
+                    let items = exec.split_whitespace().collect::<Vec<&str>>();
+                    let mut command = if let Some(mut path) = item.path.clone() {
+                        path.push(items[0]);
+                        std::process::Command::new(path)
+                    } else {
+                        std::process::Command::new(items[0])
+                    };
+                    if let Some(args) = items.get(1..) {
+                        command.args(args);
+                    }
+                    if let Err(err_exec) = command.spawn() {
+                        eprintln!("Starting application directly failed: {}", err_exec);
                     }
                 }
             }

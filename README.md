@@ -1,4 +1,4 @@
-# linch 0.2.5
+# linch 0.2.6
 Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
@@ -13,7 +13,7 @@ Cross-desktop application launcher made with ~~iced~~ egui
 ## Usage
 `linch bin` for running binaries directly from `PATH`
 
-`linch app` for running [desktop applications](https://wiki.archlinux.org/title/Desktop_entries). If you do not have GTK installed or `gtk-launch` is unavailable, it's strongly recommended you install [dex](https://github.com/jceb/dex) for smarter launching of desktop entries. The fallback method employed directly by Linch is extremely barebones.
+`linch app` for running [desktop applications](https://wiki.archlinux.org/title/Desktop_entries)
 
 `linch help` for additional information
 
