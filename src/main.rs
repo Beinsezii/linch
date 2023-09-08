@@ -33,8 +33,8 @@ use walkdir::WalkDir;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Item {
-    file: PathBuf,
     name: String,
+    file: Option<PathBuf>,
     exec: Option<String>,
     path: Option<PathBuf>,
     icon: Option<String>,
@@ -48,8 +48,8 @@ impl Item {
             .map(|osstr| osstr.to_string_lossy().to_string());
         fname
             .map(|name| Self {
-                file: path,
                 name,
+                file: Some(path),
                 path: None,
                 exec: None,
                 icon: None,
@@ -76,8 +76,8 @@ impl Item {
                 }
                 if let Some(name) = hm.get(&String::from("Name")) {
                     Ok(Self {
-                        file: path,
                         name: name.to_string(),
+                        file: Some(path),
                         exec: hm.get(&String::from("Exec")).cloned(),
                         icon: hm.get(&String::from("Icon")).cloned(),
                         path: hm
@@ -412,6 +412,7 @@ struct Linch {
 
     response: Arc<Mutex<Option<Item>>>,
     items: Vec<Item>,
+    custom: bool,
     cache: String,
     prompt: String,
     columns: usize,
@@ -431,9 +432,10 @@ impl Linch {
         cc: &eframe::CreationContext<'_>,
         mut items: Vec<Item>,
         response: Arc<Mutex<Option<Item>>>,
+        custom: bool,
         cache: String,
         prompt: String,
-        columns: usize,
+        mut columns: usize,
         rows: usize,
         fg: Color32,
         bg: Color32,
@@ -553,6 +555,8 @@ impl Linch {
         //     (std::time::Instant::now() - now).as_millis()
         // );
 
+        columns = ((items.len() as f32 / rows as f32).ceil() as usize).min(columns).max(1);
+
         Self {
             input: String::new(),
             input_compiled: None,
@@ -564,6 +568,7 @@ impl Linch {
             images,
 
             items,
+            custom,
             response,
             cache,
             prompt,
@@ -610,11 +615,21 @@ impl Linch {
     }
 
     fn set(&self) {
-        let item = self.selected();
+        let mut item = self.selected();
         if let Some(item) = item.as_ref() {
             if !self.cache.is_empty() {
                 cache_add(&self.cache, item)
             }
+        }
+        if self.custom && item.is_none() && !self.input.is_empty() {
+            item = Some(Item {
+                name: self.input.clone(),
+                file: None,
+                exec: None,
+                path: None,
+                icon: None,
+                hidden: false,
+            })
         }
         *self.response.lock().unwrap() = item
     }
@@ -847,9 +862,8 @@ enum LinchCmd {
         #[arg(long)]
         monochrome: bool,
     },
-    // Big maybe. If it's easy enough then sure, else no
-    // /// dmenu compatibility mode
-    // Dmenu,
+    /// dmenu-like choices from stdin lines. No choices will allow custom input
+    Dmenu,
 }
 
 #[derive(Parser)]
@@ -920,6 +934,7 @@ struct LinchArgs {
 
 fn response(
     items: Vec<Item>,
+    custom: bool,
     cache: String,
     args: LinchArgs,
     icons: bool,
@@ -948,6 +963,7 @@ fn response(
                 cc,
                 items,
                 res_send,
+                custom,
                 cache,
                 args.prompt,
                 args.columns.into(),
@@ -978,6 +994,7 @@ fn main() {
             let items = get_binaries();
             if let Some(item) = response(
                 items,
+                false,
                 args.cache.clone().unwrap_or(String::from("bin")),
                 args,
                 false,
@@ -997,17 +1014,17 @@ fn main() {
             let items = get_applications(all);
             if let Some(item) = response(
                 items,
+                false,
                 args.cache.clone().unwrap_or(String::from("app")),
                 args,
                 true,
                 monochrome,
             ) {
+                let file = item.file.unwrap();
                 for launcher in [
-                    std::process::Command::new("dex").arg(&item.file),
-                    std::process::Command::new("gio")
-                        .arg("launch")
-                        .arg(&item.file),
-                    std::process::Command::new("exo-open").arg(&item.file),
+                    std::process::Command::new("dex").arg(&file),
+                    std::process::Command::new("gio").arg("launch").arg(&file),
+                    std::process::Command::new("exo-open").arg(&file),
                 ] {
                     if launcher.spawn().is_ok() {
                         return;
@@ -1015,7 +1032,7 @@ fn main() {
                 }
                 eprintln!("All featured launchers failed. Falling back to gtk-launch");
                 match std::process::Command::new("gtk-launch")
-                    .arg(item.file.file_stem().unwrap())
+                    .arg(file.file_stem().unwrap())
                     .spawn()
                 {
                     Ok(mut child) => {
@@ -1041,6 +1058,33 @@ fn main() {
                         eprintln!("Starting application directly failed: {}", err_exec);
                     }
                 }
+            }
+        }
+        LinchCmd::Dmenu => {
+            let items: Vec<Item> = std::io::stdin()
+                .lines()
+                .filter_map(|r| match r.ok() {
+                    Some(l) => {
+                        if l.trim().is_empty() {
+                            None
+                        } else {
+                            Some(Item {
+                                name: l,
+                                file: None,
+                                exec: None,
+                                path: None,
+                                icon: None,
+                                hidden: false,
+                            })
+                        }
+                    }
+                    None => None,
+                })
+                .collect();
+
+            let custom = items.is_empty();
+            if let Some(item) = response(items, custom, "".to_string(), args, false, false) {
+                print!("{}", item);
             }
         }
     };

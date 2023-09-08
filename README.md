@@ -1,4 +1,4 @@
-# linch 0.2.6
+# linch 0.3.0
 Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
@@ -6,6 +6,9 @@ Cross-desktop application launcher made with ~~iced~~ egui
 ## Features
   * Launch apps or run commands on X11 and Wayland
     * Desktop entries also show icons
+  * Dmenu replacement
+    * Linking `linch <flags> dmenu` directly to `dmenu` should work for basic applications
+    * Does NOT currently support dmenu's cli flags. They will either have to be discarded or converted to linch equivalents.
   * Search with regular expressions or plain text
   * Easy custom themes
   * Pure Rust, very portable.
@@ -15,6 +18,8 @@ Cross-desktop application launcher made with ~~iced~~ egui
 
 `linch app` for running [desktop applications](https://wiki.archlinux.org/title/Desktop_entries)
 
+`linch dmenu` for piping custom choices through stdin dmenu-style
+
 `linch help` for additional information
 
 You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
@@ -22,8 +27,8 @@ You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
   * Finalize desktop application support
     * Descriptions?
     * Actions?
-  * Possible dmenu mode
   * Possibly more CLI options
+  * Dmenu 1:1 compatibility?
   * I should probably add a scroll bar.
 
 ## Known issues
