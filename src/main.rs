@@ -253,20 +253,10 @@ fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
     // adjust chroma up to 50% based on proximity to middle gray
     target[1] = (c + 100.0 - (l - 50.0).abs() * 2.0) / 2.0;
 
-    // increase brightness to suit chroma using the
-    // world's worst Helmholtz–Kohlrausch effect approximation
-    let ht = if h <= 240.0 {
-        // 0.0 @ green, 1.0 @ light blue or magenta
-        (120.0 - h).abs() / 120.0
-    } else {
-        // 0.5 @ purple, 1.0 @ light blue or magenta
-        (1.0 + (60.0 - (h - 240.0)).abs() / 60.0) / 2.0
-    };
-
-    let cs = (c - l).max(0.0) / 100.0;
-    let ls = 1.0 - cs;
-
-    target[0] = l * ls + ht * 100.0 * cs;
+    // uses a reverse HK delta to exacurbate dark and light hues against the reference
+    let tar_delta = colcon::hk_delta_2023([100.0, 100.0, h]);
+    let ref_delta = colcon::hk_delta_2023([100.0, 100.0, reference[2]]);
+    target[0] += (ref_delta - tar_delta) * (target[1] / 100.0);
 
     colcon::convert_space(colcon::Space::LCH, colcon::Space::LRGB, target);
 } // }}}
