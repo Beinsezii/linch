@@ -35,13 +35,12 @@ You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
   * Application does not stay always-on-top in Wayland
     * This is a current limitation from [winit](https://github.com/rust-windowing/winit) with [no current workaround](https://github.com/rust-windowing/winit/issues/2435)
   * Hardcoded for Linux
-    * While there's nothing (that I know of) stopping Linch from running on Windows or MacOS, there's not much of an incentive support them when they already have their own built-in launchers.
     * Hypothetically, `linch bin` might work out-of-the-box if you're so determined. All it does is search `PATH`.
 
 ## Installation
 Compiled binaries are provided on the [releases tab](https://github.com/Beinsezii/linch/releases)
 
-Additionally, stable release binaries are automatically compiled and uploaded for Linux, Windows, and MacOS with the [Build Latest Release Tag Action](https://github.com/Beinsezii/linch/actions/workflows/build_release_tag.yml)
+Additionally, stable release binaries are automatically compiled with the [Build Latest Release Tag Action](https://github.com/Beinsezii/linch/actions/workflows/build_release_tag.yml)
 while the latest unstable binaries are can be found in the [Build Master Release Action](https://github.com/Beinsezii/linch/actions/workflows/build_release_master.yml)
 
 
