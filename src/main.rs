@@ -12,23 +12,19 @@ use std::{
 
 use eframe::{
     egui::{
-        self,
-        style::{Selection, Spacing, WidgetVisuals, Widgets},
-        CentralPanel, Color32, Frame, Grid, Key, Modifiers, Sense, Stroke, Style, TextEdit,
-        Visuals,
+        style::{ScrollStyle, Selection, Spacing, WidgetVisuals, Widgets},
+        CentralPanel, Color32, ColorImage, Context, Frame, Grid, Image, Key, Modifiers, Sense, Stroke, Style, TextEdit,
+        TextureHandle, TextureOptions, ViewportBuilder, ViewportCommand, Visuals, WindowLevel,
     },
     emath::Align2,
     epaint::{FontId, Rgba, Rounding, Shadow, Vec2},
     App, NativeOptions,
 };
-use egui_extras::{
-    image::{load_image_bytes, FitTo},
-    RetainedImage,
-};
 
 use clap::{Parser, Subcommand};
 use lexical_sort::natural_lexical_cmp;
 use regex::Regex;
+use resvg::{tiny_skia, usvg};
 use walkdir::WalkDir;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -43,9 +39,7 @@ struct Item {
 
 impl Item {
     fn from_path(path: PathBuf) -> Result<Self, ()> {
-        let fname = path
-            .file_name()
-            .map(|osstr| osstr.to_string_lossy().to_string());
+        let fname = path.file_name().map(|osstr| osstr.to_string_lossy().to_string());
         fname
             .map(|name| Self {
                 name,
@@ -80,10 +74,7 @@ impl Item {
                         file: Some(path),
                         exec: hm.get(&String::from("Exec")).cloned(),
                         icon: hm.get(&String::from("Icon")).cloned(),
-                        path: hm
-                            .get(&String::from("Path"))
-                            .cloned()
-                            .map(|s| PathBuf::from(s)),
+                        path: hm.get(&String::from("Path")).cloned().map(|s| PathBuf::from(s)),
                         hidden: hm
                             .get(&String::from("Hidden"))
                             .map(|s| s.parse::<bool>().ok())
@@ -215,17 +206,13 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
         .into_iter()
         .chain(WalkDir::new("/usr/share/icons/Adwaita"))
         // scan all other themes as last resort
-        .chain(
-            WalkDir::new("/usr/share/icons")
-                .into_iter()
-                .filter_entry(|e| {
-                    e.file_name() != "Papirus"
+        .chain(WalkDir::new("/usr/share/icons").into_iter().filter_entry(|e| {
+            e.file_name() != "Papirus"
                         && e.file_name() != "hicolor"
                         && e.file_name() != "Adwaita"
                         // also skip symbolic icons. I'm not gonna support them
                         && e.file_name() != "symbolic"
-                }),
-        )
+        }))
         .filter_map(|e| e.ok())
         .filter(|e| e.path().file_stem() == osname)
         .filter(|e| e.path().extension() == png || e.path().extension() == svg)
@@ -237,11 +224,10 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
     None
 } // }}}
 
-fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
+fn monochromatize_pixel(mut reference: [f32; 3], target: &mut [f32; 3]) {
     // {{{
-    let mut reference = reference;
-    colcon::convert_space(colcon::Space::LRGB, colcon::Space::LCH, &mut reference);
-    colcon::convert_space(colcon::Space::LRGB, colcon::Space::LCH, target);
+    colcon::convert_space(colcon::Space::LRGB, colcon::Space::CIELCH, &mut reference);
+    colcon::convert_space(colcon::Space::LRGB, colcon::Space::CIELCH, target);
 
     let l = target[0];
     let c = target[1];
@@ -254,11 +240,11 @@ fn monochromatize_pixel(reference: [f32; 3], target: &mut [f32; 3]) {
     target[1] = (c + 100.0 - (l - 50.0).abs() * 2.0) / 2.0;
 
     // uses a reverse HK delta to exacurbate dark and light hues against the reference
-    let tar_delta = colcon::hk_delta_2023([100.0, 100.0, h]);
-    let ref_delta = colcon::hk_delta_2023([100.0, 100.0, reference[2]]);
+    let tar_delta = colcon::hk_high2023(&[100.0, 100.0, h]);
+    let ref_delta = colcon::hk_high2023(&[100.0, 100.0, reference[2]]);
     target[0] += (ref_delta - tar_delta) * (target[1] / 100.0);
 
-    colcon::convert_space(colcon::Space::LCH, colcon::Space::LRGB, target);
+    colcon::convert_space(colcon::Space::CIELCH, colcon::Space::LRGB, target);
 } // }}}
 
 fn monochromatize_svg(data: &mut [u8], color: Color32) {
@@ -279,12 +265,11 @@ fn monochromatize_svg(data: &mut [u8], color: Color32) {
         for (i, o) in indicies.into_iter() {
             unsafe {
                 let slice = svg.get_unchecked_mut(i + o..i + 7 + o);
-                let mut fill =
-                    colcon::irgb_to_srgb(if let Ok(pixel) = colcon::hex_to_irgb(slice) {
-                        pixel
-                    } else {
-                        continue;
-                    });
+                let mut fill = colcon::irgb_to_srgb(if let Ok(pixel) = colcon::hex_to_irgb(slice) {
+                    pixel
+                } else {
+                    continue;
+                });
                 colcon::srgb_to_lrgb(&mut fill);
                 monochromatize_pixel(color, &mut fill);
                 colcon::lrgb_to_srgb(&mut fill);
@@ -329,10 +314,7 @@ fn cache_get(name: &str) -> Vec<(usize, String)> {
         let re = Regex::new(r"^(\d+) +(.+)$").unwrap();
         for line in data.lines() {
             if let Some(captures) = re.captures(line.trim()) {
-                result.push((
-                    captures[1].parse::<usize>().unwrap(),
-                    captures[2].to_string(),
-                ))
+                result.push((captures[1].parse::<usize>().unwrap(), captures[2].to_string()))
             }
         }
     }
@@ -352,8 +334,7 @@ fn cache_set(name: &str, lines: Vec<(usize, String)>) {
 }
 
 fn cache_apply(name: &str, items: &mut [Item]) {
-    let map: HashMap<String, usize> =
-        HashMap::from_iter(cache_get(name).into_iter().map(|(n, s)| (s, n)));
+    let map: HashMap<String, usize> = HashMap::from_iter(cache_get(name).into_iter().map(|(n, s)| (s, n)));
     items.sort_by(|a, b| {
         map.get(&a.name.clone())
             .unwrap_or(&0)
@@ -398,7 +379,7 @@ struct Linch {
     scroll: usize,
     hover: Option<usize>,
     focused: bool,
-    images: HashMap<String, RetainedImage>,
+    images: HashMap<String, TextureHandle>,
 
     response: Arc<Mutex<Option<Item>>>,
     items: Vec<Item>,
@@ -461,7 +442,7 @@ impl Linch {
                 window_fill: bg.gamma_multiply(opacity),
                 window_shadow: Shadow::NONE,
                 window_stroke: Stroke::new(3.0 * scale, acc),
-                window_rounding: Rounding::none(),
+                window_rounding: Rounding::ZERO,
                 ..style.visuals
             },
             spacing: Spacing {
@@ -472,18 +453,18 @@ impl Linch {
                 indent: 0.0,
                 interact_size: (0.0, 0.0).into(),
                 slider_width: 0.0,
+                slider_rail_height: 0.0,
                 combo_width: 0.0,
                 text_edit_width: 0.0,
                 icon_width: 0.0,
                 icon_width_inner: 0.0,
                 icon_spacing: 0.0,
                 tooltip_width: 0.0,
-                combo_height: 0.0,
-                scroll_bar_width: 0.0,
-                scroll_handle_min_length: 0.0,
-                scroll_bar_inner_margin: 0.0,
-                scroll_bar_outer_margin: 0.0,
+                menu_width: 0.0,
+                menu_spacing: 0.0,
                 indent_ends_with_horizontal_line: false,
+                combo_height: 0.0,
+                scroll: ScrollStyle::default(),
             },
             ..style
         });
@@ -494,10 +475,13 @@ impl Linch {
             items.sort_unstable_by(|a, b| natural_lexical_cmp(a.as_ref(), b.as_ref()))
         }
 
+        //let now = std::time::Instant::now();
+
         let mut images = HashMap::new();
-        // let now = std::time::Instant::now();
         let acc_pixel = Rgba::from(acc);
         let acc_pixel = [acc_pixel[0], acc_pixel[1], acc_pixel[2]];
+        let w = 64;
+        let h = w;
         if icons {
             for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
                 if !images.contains_key(icon) {
@@ -505,34 +489,46 @@ impl Linch {
                         if let Ok(mut file) = File::open(&path) {
                             let mut data = Vec::new();
                             if file.read_to_end(&mut data).is_ok() {
+                                let mut color_image = None;
                                 if path.extension() == Some(&OsStr::new("svg")) {
                                     if monochrome {
                                         monochromatize_svg(&mut data, acc)
                                     };
-                                    if let Ok(ri) = RetainedImage::from_svg_bytes_with_size(
-                                        icon,
-                                        &data,
-                                        FitTo::Height(64),
-                                    ) {
-                                        images.insert(icon.to_string(), ri);
+                                    if let Ok(data) = usvg::Tree::from_data(&data, &usvg::Options::default()) {
+                                        let scale =
+                                            (w as f32 / data.size().width()).min(h as f32 / data.size().height());
+                                        let mut pixbuf = tiny_skia::Pixmap::new(w, h).unwrap();
+                                        resvg::render(
+                                            &data,
+                                            tiny_skia::Transform::from_scale(scale, scale),
+                                            &mut pixbuf.as_mut(),
+                                        );
+                                        color_image = Some(ColorImage::from_rgba_unmultiplied(
+                                            [pixbuf.width() as usize, pixbuf.height() as usize],
+                                            &pixbuf.take(),
+                                        ));
                                     }
                                 } else {
-                                    if let Ok(mut ci) = load_image_bytes(&data) {
-                                        ci.pixels.iter_mut().for_each(|pixel| {
-                                            let rgb = Rgba::from(*pixel);
-                                            let a = rgb[3];
-                                            let mut rgb = [rgb[0], rgb[1], rgb[2]];
-                                            monochromatize_pixel(acc_pixel, &mut rgb);
-                                            *pixel = Rgba::from_rgba_premultiplied(
-                                                rgb[0], rgb[1], rgb[2], a,
-                                            )
-                                            .into()
-                                        });
-                                        images.insert(
-                                            icon.to_string(),
-                                            RetainedImage::from_color_image(icon, ci),
-                                        );
-                                    }
+                                    if let Some(image) =
+                                        image::io::Reader::open(path).map(|r| r.decode().ok()).ok().flatten()
+                                    {
+                                        let mut image = image.into_rgba32f();
+                                        if monochrome {
+                                            image.pixels_mut().for_each(|p| {
+                                                let mut pix: [f32; 3] = [p[0], p[1], p[2]];
+                                                monochromatize_pixel(acc_pixel, &mut pix);
+                                                *p = [pix[0], pix[1], pix[2], p[3]].into()
+                                            });
+                                        }
+                                        color_image = Some(ColorImage::from_rgba_unmultiplied(
+                                            [image.width() as usize, image.height() as usize],
+                                            &image::DynamicImage::from(image).into_rgba8(),
+                                        ));
+                                    };
+                                }
+                                if let Some(ci) = color_image {
+                                    let th = cc.egui_ctx.load_texture(icon, ci, TextureOptions::default());
+                                    images.insert(icon.to_string(), th);
                                 }
                             }
                         }
@@ -540,10 +536,8 @@ impl Linch {
                 }
             }
         }
-        // println!(
-        //     "Icons loaded in {}ms",
-        //     (std::time::Instant::now() - now).as_millis()
-        // );
+
+        //println!("Icons loaded in {}ms", (std::time::Instant::now() - now).as_millis());
 
         columns = ((items.len() as f32 / rows as f32).ceil() as usize).min(columns).max(1);
 
@@ -585,11 +579,7 @@ impl Linch {
     }
 
     fn items_filtered(&self, count: usize, skip: usize) -> Vec<Item> {
-        self.items_filter()
-            .skip(skip)
-            .take(count)
-            .cloned()
-            .collect()
+        self.items_filter().skip(skip).take(count).cloned().collect()
     }
 
     fn selected(&self) -> Option<Item> {
@@ -636,34 +626,36 @@ impl Linch {
 
 impl App for Linch {
     // {{{
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+    fn clear_color(&self, _visuals: &Visuals) -> [f32; 4] {
         Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        match frame.info().window_info.focused {
-            true => self.focused = true,
-            false => {
-                if self.focused && self.exit_unfocus {
-                    frame.close()
-                }
-            }
-        }
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        let mut close = false;
         let area = self.rows * self.columns;
         let count = self.items_filter().count() - self.scroll * area;
         ctx.input_mut(|i| {
+            match i.viewport().focused {
+                Some(true) => self.focused = true,
+                Some(false) => {
+                    if self.focused && self.exit_unfocus {
+                        close = true
+                    }
+                }
+                None => (),
+            }
             if i.consume_key(Modifiers::NONE, Key::Enter) {
                 self.set();
-                frame.close();
+                close = true
             } else if i.consume_key(Modifiers::NONE, Key::Escape) {
-                frame.close();
+                close = true
             } else if i.consume_key(Modifiers::NONE, Key::Tab) {
                 self.input_selected = !self.input_selected;
             } else if i.consume_key(Modifiers::NONE, Key::Delete) {
                 self.del()
-            } else if i.scroll_delta.y < 0.0 && count > area {
+            } else if i.raw_scroll_delta.y < 0.0 && count > area {
                 self.scroll += 1;
                 self.index = self.index.min(count - area - 1)
-            } else if i.scroll_delta.y > 0.0 && self.scroll > 0 {
+            } else if i.raw_scroll_delta.y > 0.0 && self.scroll > 0 {
                 self.scroll -= 1
             }
             if !self.input_selected {
@@ -675,20 +667,15 @@ impl App for Linch {
                         self.index += self.rows - 1
                     }
                 } else if i.consume_key(Modifiers::NONE, Key::ArrowDown) {
-                    if self.index % self.rows < self.rows - 1
-                        && self.index < count.saturating_sub(1)
-                    {
+                    if self.index % self.rows < self.rows - 1 && self.index < count.saturating_sub(1) {
                         self.index += 1
                     } else if count > area {
                         self.scroll += 1;
                         self.index = (self.index + 1 - self.rows).min(count - area - 1)
                     }
-                } else if i.consume_key(Modifiers::NONE, Key::ArrowRight)
-                    && self.index + self.rows < count.min(area)
-                {
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowRight) && self.index + self.rows < count.min(area) {
                     self.index += self.rows
-                } else if i.consume_key(Modifiers::NONE, Key::ArrowLeft) && self.index >= self.rows
-                {
+                } else if i.consume_key(Modifiers::NONE, Key::ArrowLeft) && self.index >= self.rows {
                     self.index -= self.rows
                 }
             }
@@ -746,10 +733,8 @@ impl App for Linch {
                     .min_col_width(sx)
                     .max_col_width(sx)
                     .show(ui, |ui| {
-                        let items = self.items_filtered(
-                            self.rows * self.columns,
-                            self.scroll * self.rows * self.columns,
-                        );
+                        let items =
+                            self.items_filtered(self.rows * self.columns, self.scroll * self.rows * self.columns);
                         let mut hover_set = false;
                         for r in 0..self.rows {
                             for c in 0..self.columns {
@@ -781,19 +766,11 @@ impl App for Linch {
                                                     x: ui.available_height(),
                                                     y: 0.0,
                                                 };
-                                                match i
-                                                    .icon
-                                                    .as_ref()
-                                                    .map(|i| self.images.get(i))
-                                                    .flatten()
-                                                {
-                                                    Some(image) => drop(ui.image(
-                                                        image.texture_id(ui.ctx()),
-                                                        Vec2::splat(ui.available_height()),
-                                                    )),
-                                                    None => drop(ui.allocate_space(Vec2::splat(
-                                                        ui.available_height(),
+                                                match i.icon.as_ref().map(|i| self.images.get(i)).flatten() {
+                                                    Some(image) => drop(ui.add(Image::new(image).fit_to_exact_size(
+                                                        (ui.available_height(), ui.available_height()).into(),
                                                     ))),
+                                                    None => drop(ui.allocate_space(Vec2::splat(ui.available_height()))),
                                                 }
                                             }
                                             // manually paint text to avoid overallocation
@@ -820,7 +797,7 @@ impl App for Linch {
                                         self.input_selected = false;
                                         if submit && !self.input_selected {
                                             self.set();
-                                            frame.close();
+                                            close = true
                                         } else {
                                             self.index = n;
                                         }
@@ -834,6 +811,9 @@ impl App for Linch {
                         }
                     });
             });
+        if close {
+            ctx.send_viewport_cmd(ViewportCommand::Close)
+        }
     }
 } // }}}
 
@@ -940,12 +920,13 @@ fn response(
     eframe::run_native(
         "Linch",
         NativeOptions {
-            resizable: false,
-            always_on_top: true,
+            viewport: ViewportBuilder::default()
+                .with_decorations(false)
+                .with_inner_size((args.width * scale, args.height * scale))
+                .with_resizable(false)
+                .with_transparent(if args.opacity < 1.0 { true } else { false })
+                .with_window_level(WindowLevel::AlwaysOnTop),
             centered: true,
-            transparent: if args.opacity < 1.0 { true } else { false },
-            decorated: false,
-            initial_window_size: Some(Vec2::new(args.width * scale, args.height * scale)),
             ..Default::default()
         },
         Box::new(move |cc| {

@@ -6,12 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-colcon="0.2"
+colcon="0.9"
 clap = { version = "4", features = ["derive"] }
-eframe={version = "0.22", features=["wgpu"]}
-egui_extras = {version = "0.22", features=["image", "svg"]}
+eframe={version = "0.27", features=["wgpu"]}
+image = "0.25"
 lexical-sort="0.3"
 regex="1"
+resvg = "0.42"
 walkdir = "2"
 
 [profile.release]
