@@ -111,7 +111,9 @@ impl std::fmt::Display for Item {
 }
 
 fn parse_color(s: &str) -> Result<Color32, String> {
-    colcon::hex_to_irgb(s).map(|rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+    colcon::str2space(s, Space::LRGB)
+        .map(|rgb| Color32::from(Rgba::from_rgb(rgb[0], rgb[1], rgb[2])))
+        .ok_or_else(|| String::from("Could not parse \"") + s + "\" as a color.")
 }
 
 // Reference:
@@ -833,16 +835,16 @@ struct LinchArgs {
     #[arg(short = 'y', long, default_value = "400.0")]
     height: f32,
 
-    /// Foreground color in hex
+    /// Foreground color in #hex or color space
     #[arg(short, long, default_value = "#ffffff", value_parser=parse_color)]
     foreground: Color32,
 
-    /// Background color in hex
+    /// Background color in #hex or color space
     #[arg(short, long, default_value = "#000000", value_parser=parse_color)]
     background: Color32,
 
-    /// Accent color in hex
-    #[arg(short, long, default_value = "#ffbb66", value_parser=parse_color)]
+    /// Accent color in #hex or color space
+    #[arg(short, long, default_value = "oklch 70% 60% 95", value_parser=parse_color)]
     accent: Color32,
 
     /// Background opacity 0.0 -> 1.0
