@@ -41,9 +41,13 @@ You may export `WINIT_UNIX_BACKEND=x11` to force Linch to run in X11 mode.
 ## Installation
 Compiled binaries are provided on the [releases tab](https://github.com/Beinsezii/linch/releases)
 
+Additionally, stable release binaries are automatically compiled and uploaded for Linux, Windows, and MacOS with the [Build Latest Release Tag Action](https://github.com/Beinsezii/linch/actions/workflows/build_release_tag.yml)
+while the latest unstable binaries are can be found in the [Build Master Release Action](https://github.com/Beinsezii/linch/actions/workflows/build_release_master.yml)
+
+
 If you already have [Rust installed](https://rustup.rs/), you can build the latest release with
 
-`cargo install --git https://github.com/Beinsezii/linch.git --tag 0.1.0`
+`cargo install --git https://github.com/Beinsezii/linch.git --tag 0.4.0`
 
 You may omit the `--tag` flag if you follow the rebel path and want the latest possibly unstable build.
 
