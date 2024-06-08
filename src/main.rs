@@ -10,6 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use colcon::{convert_space, convert_space_alpha, Space};
 use eframe::{
     egui::{
         style::{ScrollStyle, Selection, Spacing, WidgetVisuals, Widgets},
@@ -224,64 +225,36 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
     None
 } // }}}
 
-fn monochromatize_pixel(mut reference: [f32; 3], target: &mut [f32; 3]) {
+fn monochromatize(mut reference: [f32; 3], target: &mut [f32; 4]) {
     // {{{
-    colcon::convert_space(colcon::Space::LRGB, colcon::Space::CIELCH, &mut reference);
-    colcon::convert_space(colcon::Space::LRGB, colcon::Space::CIELCH, target);
+    convert_space(Space::LRGB, Space::JZCZHZ, &mut reference);
+    convert_space_alpha(Space::LRGB, Space::JZCZHZ, target);
 
-    let l = target[0];
-    let c = target[1];
+    let lmax = Space::JZCZHZ.srgb_quant100()[0];
+    let cmax = Space::JZCZHZ.srgb_quant100()[1];
+
+    let lmin = Space::JZCZHZ.srgb_quant0()[0];
+    let cmin = Space::JZCZHZ.srgb_quant0()[1];
+
+    let l = (target[0] - lmin) / lmax + lmin / lmax;
+    let c = (target[1] - cmin) / cmax + cmin / cmax;
     let h = target[2];
 
     // set hue
     target[2] = reference[2];
 
     // adjust chroma up to 50% based on proximity to middle gray
-    target[1] = (c + 100.0 - (l - 50.0).abs() * 2.0) / 2.0;
+    target[1] = c * 0.5 + (0.5 - (l - 0.5).abs());
 
     // uses a reverse HK delta to exacurbate dark and light hues against the reference
     let tar_delta = colcon::hk_high2023(&[100.0, 100.0, h]);
     let ref_delta = colcon::hk_high2023(&[100.0, 100.0, reference[2]]);
-    target[0] += (ref_delta - tar_delta) * (target[1] / 100.0);
+    target[0] = l + (ref_delta - tar_delta) / 100.0 / 2.0;
 
-    colcon::convert_space(colcon::Space::CIELCH, colcon::Space::LRGB, target);
-} // }}}
+    target[0] = (target[0] + lmin / lmax) * lmax;
+    target[1] = (target[1] + lmin / lmax) * lmax;
 
-fn monochromatize_svg(data: &mut [u8], color: Color32) {
-    // {{{
-    let color = Rgba::from(color);
-    let color = [color[0], color[1], color[2]];
-    if let Ok(svg) = std::str::from_utf8_mut(data) {
-        let indicies: Vec<(usize, usize)> = svg
-            .match_indices("fill:#")
-            .chain(svg.match_indices("stroke:#"))
-            .chain(svg.match_indices("color:#"))
-            .chain(svg.match_indices("fill=\"#"))
-            .chain(svg.match_indices("stroke=\"#"))
-            .chain(svg.match_indices("color=\"#"))
-            .map(|(i, s)| (i, s.len() - 1))
-            .collect();
-
-        for (i, o) in indicies.into_iter() {
-            unsafe {
-                let slice = svg.get_unchecked_mut(i + o..i + 7 + o);
-                let mut fill = colcon::irgb_to_srgb(if let Ok(pixel) = colcon::hex_to_irgb(slice) {
-                    pixel
-                } else {
-                    continue;
-                });
-                colcon::srgb_to_lrgb(&mut fill);
-                monochromatize_pixel(color, &mut fill);
-                colcon::lrgb_to_srgb(&mut fill);
-                let fill = colcon::irgb_to_hex(colcon::srgb_to_irgb(fill));
-                slice
-                    .as_bytes_mut()
-                    .iter_mut()
-                    .zip(fill.as_bytes().into_iter())
-                    .for_each(|(a, b)| *a = *b);
-            }
-        }
-    }
+    convert_space_alpha(Space::JZCZHZ, Space::LRGB, target);
 } // }}}
 
 fn scale_factor() -> f32 {
@@ -417,6 +390,7 @@ impl Linch {
         exit_unfocus: bool,
         icons: bool,
         monochrome: bool,
+        size: [f32; 2],
     ) -> Self {
         let style = cc.egui_ctx.style().as_ref().clone();
         cc.egui_ctx.set_style(Style {
@@ -480,7 +454,7 @@ impl Linch {
         let mut images = HashMap::new();
         let acc_pixel = Rgba::from(acc);
         let acc_pixel = [acc_pixel[0], acc_pixel[1], acc_pixel[2]];
-        let w = 64;
+        let w = (size[1] * scale / (rows + 1) as f32 / 16.0).ceil() as u32 * 16;
         let h = w;
         if icons {
             for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
@@ -491,9 +465,6 @@ impl Linch {
                             if file.read_to_end(&mut data).is_ok() {
                                 let mut color_image = None;
                                 if path.extension() == Some(&OsStr::new("svg")) {
-                                    if monochrome {
-                                        monochromatize_svg(&mut data, acc)
-                                    };
                                     if let Ok(data) = usvg::Tree::from_data(&data, &usvg::Options::default()) {
                                         let scale =
                                             (w as f32 / data.size().width()).min(h as f32 / data.size().height());
@@ -512,21 +483,22 @@ impl Linch {
                                     if let Some(image) =
                                         image::io::Reader::open(path).map(|r| r.decode().ok()).ok().flatten()
                                     {
-                                        let mut image = image.into_rgba32f();
-                                        if monochrome {
-                                            image.pixels_mut().for_each(|p| {
-                                                let mut pix: [f32; 3] = [p[0], p[1], p[2]];
-                                                monochromatize_pixel(acc_pixel, &mut pix);
-                                                *p = [pix[0], pix[1], pix[2], p[3]].into()
-                                            });
-                                        }
                                         color_image = Some(ColorImage::from_rgba_unmultiplied(
                                             [image.width() as usize, image.height() as usize],
-                                            &image::DynamicImage::from(image).into_rgba8(),
+                                            &image.into_rgba8(),
                                         ));
                                     };
                                 }
-                                if let Some(ci) = color_image {
+                                if let Some(mut ci) = color_image {
+                                    if monochrome {
+                                        ci.pixels.iter_mut().for_each(|c32| {
+                                            let mut rgba = Rgba::from(*c32).to_rgba_unmultiplied();
+                                            monochromatize(acc_pixel, &mut rgba);
+                                            *c32 = Color32::from(Rgba::from_rgba_unmultiplied(
+                                                rgba[0], rgba[1], rgba[2], rgba[3],
+                                            ))
+                                        });
+                                    }
                                     let th = cc.egui_ctx.load_texture(icon, ci, TextureOptions::default());
                                     images.insert(icon.to_string(), th);
                                 }
@@ -948,6 +920,7 @@ fn response(
                 args.exit_unfocus,
                 icons,
                 monochrome,
+                [args.width, args.height],
             ))
         }),
     )
