@@ -879,8 +879,7 @@ dependencies = [
 [[package]]
 name = "colcon"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5bb42bf17bbb92620eeebd78e7bbf94a69f4593200e0d29a8a35e52cec28544"
+source = "git+https://github.com/Beinsezii/colcon.git?branch=4chan#4675887a78c7e590db4d8c8e7a047c52a2d66e83"
 
 [[package]]
 name = "color_quant"

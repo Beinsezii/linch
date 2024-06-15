@@ -1,26 +1,18 @@
+use std::ffi::{OsStr, OsString};
+use std::fs::{read_to_string, remove_file, write, File};
+use std::sync::{Arc, Mutex};
 use std::{
-    collections::HashMap,
-    env,
-    ffi::{OsStr, OsString},
-    fs::{read_to_string, remove_file, write, File},
-    io::Read,
-    num::NonZeroUsize,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    sync::{Arc, Mutex},
+    collections::HashMap, env, io::Read, mem::swap, num::NonZeroUsize, os::unix::fs::PermissionsExt, path::PathBuf,
 };
 
-use colcon::{convert_space, convert_space_alpha, Space};
-use eframe::{
-    egui::{
-        style::{ScrollStyle, Selection, Spacing, WidgetVisuals, Widgets},
-        CentralPanel, Color32, ColorImage, Context, Frame, Grid, Image, Key, Modifiers, Sense, Stroke, Style, TextEdit,
-        TextureHandle, TextureOptions, ViewportBuilder, ViewportCommand, Visuals, WindowLevel,
-    },
-    emath::Align2,
-    epaint::{FontId, Rgba, Rounding, Shadow, Vec2},
-    App, NativeOptions,
+use colcon::{convert_space, convert_space_chunked, Space};
+use eframe::egui::style::{ScrollStyle, Selection, Spacing, WidgetVisuals, Widgets};
+use eframe::egui::{
+    CentralPanel, Color32, ColorImage, Context, Frame, Grid, Image, Key, Modifiers, Sense, Stroke, Style, TextEdit,
+    TextureHandle, TextureOptions, ViewportBuilder, ViewportCommand, Visuals, WindowLevel,
 };
+use eframe::epaint::{FontId, Rgba, Rounding, Shadow, Vec2};
+use eframe::{emath::Align2, App, NativeOptions};
 
 use clap::{Parser, Subcommand};
 use lexical_sort::natural_lexical_cmp;
@@ -227,10 +219,10 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
     None
 } // }}}
 
-fn monochromatize(mut reference: [f32; 3], target: &mut [f32; 4]) {
+fn monochromatize(mut reference: [f32; 3], target: &mut [[f32; 4]], target_space: Space) {
     // {{{
-    convert_space(Space::LRGB, Space::JZCZHZ, &mut reference);
-    convert_space_alpha(Space::LRGB, Space::JZCZHZ, target);
+    convert_space(target_space, Space::JZCZHZ, &mut reference);
+    convert_space_chunked(target_space, Space::JZCZHZ, target);
 
     let lmax = Space::JZCZHZ.srgb_quant100()[0];
     let cmax = Space::JZCZHZ.srgb_quant100()[1];
@@ -238,25 +230,27 @@ fn monochromatize(mut reference: [f32; 3], target: &mut [f32; 4]) {
     let lmin = Space::JZCZHZ.srgb_quant0()[0];
     let cmin = Space::JZCZHZ.srgb_quant0()[1];
 
-    let l = (target[0] - lmin) / lmax + lmin / lmax;
-    let c = (target[1] - cmin) / cmax + cmin / cmax;
-    let h = target[2];
+    target.iter_mut().for_each(|chunk| {
+        let l = (chunk[0] - lmin) / lmax + lmin / lmax;
+        let c = (chunk[1] - cmin) / cmax + cmin / cmax;
+        let h = chunk[2];
 
-    // set hue
-    target[2] = reference[2];
+        // set hue
+        chunk[2] = reference[2];
 
-    // adjust chroma up to 50% based on proximity to middle gray
-    target[1] = c * 0.5 + (0.5 - (l - 0.5).abs());
+        // adjust chroma up to 50% based on proximity to middle gray
+        chunk[1] = c * 0.5 + (0.5 - (l - 0.5).abs());
 
-    // uses a reverse HK delta to exacurbate dark and light hues against the reference
-    let tar_delta = colcon::hk_high2023(&[100.0, 100.0, h]);
-    let ref_delta = colcon::hk_high2023(&[100.0, 100.0, reference[2]]);
-    target[0] = l + (ref_delta - tar_delta) / 100.0 / 2.0;
+        // uses a reverse HK delta to exacurbate dark and light hues against the reference
+        let tar_delta = colcon::hk_high2023(&[100.0, 100.0, h]);
+        let ref_delta = colcon::hk_high2023(&[100.0, 100.0, reference[2]]);
+        chunk[0] = l + (ref_delta - tar_delta) / 100.0 / 2.0;
 
-    target[0] = (target[0] + lmin / lmax) * lmax;
-    target[1] = (target[1] + lmin / lmax) * lmax;
+        chunk[0] = (chunk[0] + lmin / lmax) * lmax;
+        chunk[1] = (chunk[1] + lmin / lmax) * lmax;
+    });
 
-    convert_space_alpha(Space::JZCZHZ, Space::LRGB, target);
+    convert_space_chunked(Space::JZCZHZ, target_space, target);
 } // }}}
 
 fn scale_factor() -> f32 {
@@ -493,13 +487,23 @@ impl Linch {
                                 }
                                 if let Some(mut ci) = color_image {
                                     if monochrome {
-                                        ci.pixels.iter_mut().for_each(|c32| {
-                                            let mut rgba = Rgba::from(*c32).to_rgba_unmultiplied();
-                                            monochromatize(acc_pixel, &mut rgba);
-                                            *c32 = Color32::from(Rgba::from_rgba_unmultiplied(
-                                                rgba[0], rgba[1], rgba[2], rgba[3],
-                                            ))
-                                        });
+                                        let mut pixels: Vec<[f32; 4]> = ci
+                                            .pixels
+                                            .clone()
+                                            .into_iter()
+                                            .map(|c32| Rgba::from(c32).to_rgba_unmultiplied())
+                                            .collect();
+
+                                        monochromatize(acc_pixel, &mut pixels, Space::LRGB);
+
+                                        let mut pixels: Vec<Color32> = pixels
+                                            .into_iter()
+                                            .map(|p| {
+                                                Color32::from(Rgba::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+                                            })
+                                            .collect();
+
+                                        swap(&mut ci.pixels, &mut pixels);
                                     }
                                     let th = cc.egui_ctx.load_texture(icon, ci, TextureOptions::default());
                                     images.insert(icon.to_string(), th);
