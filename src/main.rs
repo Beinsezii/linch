@@ -221,7 +221,7 @@ fn get_icon_loc(name: &str) -> Option<PathBuf> {
 
 fn monochromatize(mut reference: [f32; 3], target: &mut [[f32; 4]], target_space: Space) {
     // {{{
-    convert_space(target_space, Space::JZCZHZ, &mut reference);
+    convert_space(Space::LRGB, Space::JZCZHZ, &mut reference);
     convert_space_chunked(target_space, Space::JZCZHZ, target);
 
     let lmax = Space::JZCZHZ.srgb_quant100()[0];
