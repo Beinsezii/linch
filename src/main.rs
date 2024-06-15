@@ -1,9 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{read_to_string, remove_file, write, File};
 use std::sync::{Arc, Mutex};
-use std::{
-    collections::HashMap, env, io::Read, mem::swap, num::NonZeroUsize, os::unix::fs::PermissionsExt, path::PathBuf,
-};
+use std::{collections::HashMap, env, io::Read, num::NonZeroUsize, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use colcon::{convert_space, convert_space_chunked, Space};
 use eframe::egui::style::{ScrollStyle, Selection, Spacing, WidgetVisuals, Widgets};
@@ -489,21 +487,18 @@ impl Linch {
                                     if monochrome {
                                         let mut pixels: Vec<[f32; 4]> = ci
                                             .pixels
-                                            .clone()
                                             .into_iter()
                                             .map(|c32| Rgba::from(c32).to_rgba_unmultiplied())
                                             .collect();
 
                                         monochromatize(acc_pixel, &mut pixels, Space::LRGB);
 
-                                        let mut pixels: Vec<Color32> = pixels
+                                        ci.pixels = pixels
                                             .into_iter()
                                             .map(|p| {
                                                 Color32::from(Rgba::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
                                             })
                                             .collect();
-
-                                        swap(&mut ci.pixels, &mut pixels);
                                     }
                                     let th = cc.egui_ctx.load_texture(icon, ci, TextureOptions::default());
                                     images.insert(icon.to_string(), th);
