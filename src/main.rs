@@ -101,7 +101,7 @@ impl std::fmt::Display for Item {
 }
 
 fn parse_color(s: &str) -> Result<Color32, String> {
-    colcon::str2space(s, Space::LRGB)
+    colcon::str2space::<f32, 3>(s, Space::LRGB)
         .map(|rgb| Color32::from(Rgba::from_rgb(rgb[0], rgb[1], rgb[2])))
         .ok_or_else(|| String::from("Could not parse \"") + s + "\" as a color.")
 }
