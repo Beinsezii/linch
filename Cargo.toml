@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 # colcon="0.9"
-colcon = { git = "https://github.com/Beinsezii/colcon.git", branch = "4chan" }
+colcon = {git = "https://github.com/Beinsezii/colcon.git"}
 clap = { version = "4", features = ["derive"] }
 eframe={version = "0.27", features=["wgpu"]}
 image = "0.25"
