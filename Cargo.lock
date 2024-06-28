@@ -879,7 +879,7 @@ dependencies = [
 [[package]]
 name = "colcon"
 version = "0.9.0"
-source = "git+https://github.com/Beinsezii/colcon.git#cd8395b2a40a41c38212ca3cdb9f10bfc12e5559"
+source = "git+https://github.com/Beinsezii/colcon.git#7e4c78f4fcf444fb3788a4cf816b24535beafcd0"
 
 [[package]]
 name = "color_quant"

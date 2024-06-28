@@ -222,11 +222,8 @@ fn monochromatize(mut reference: [f32; 3], target: &mut [[f32; 4]], target_space
     convert_space(Space::LRGB, Space::JZCZHZ, &mut reference);
     convert_space_chunked(target_space, Space::JZCZHZ, target);
 
-    let lmax = Space::JZCZHZ.srgb_quant100()[0];
-    let cmax = Space::JZCZHZ.srgb_quant100()[1];
-
-    let lmin = Space::JZCZHZ.srgb_quant0()[0];
-    let cmin = Space::JZCZHZ.srgb_quant0()[1];
+    let [lmax, cmax, _] = Space::JZCZHZ.srgb_quants()[100];
+    let [lmin, cmin, _] = Space::JZCZHZ.srgb_quants()[0];
 
     target.iter_mut().for_each(|chunk| {
         let l = (chunk[0] - lmin) / lmax + lmin / lmax;
