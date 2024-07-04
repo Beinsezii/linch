@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# colcon="0.9"
-colcon = {git = "https://github.com/Beinsezii/colcon.git"}
+colcon="0.10"
+# colcon = {git = "https://github.com/Beinsezii/colcon.git"}
 clap = { version = "4", features = ["derive"] }
 eframe={version = "0.27", features=["wgpu"]}
 image = "0.25"
