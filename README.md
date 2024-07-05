@@ -1,4 +1,4 @@
-# linch 0.4.0
+# linch 0.4.1
 Cross-desktop application launcher made with ~~iced~~ egui
 
 <img src="./screenshot.png" height = 300 px />
@@ -46,7 +46,7 @@ while the latest unstable binaries are can be found in the [Build Master Release
 
 If you already have [Rust installed](https://rustup.rs/), you can build the latest release with
 
-`cargo install --git https://github.com/Beinsezii/linch.git --tag 0.4.0`
+`cargo install --git https://github.com/Beinsezii/linch.git --tag 0.4.1`
 
 You may omit the `--tag` flag if you follow the rebel path and want the latest possibly unstable build.
 
