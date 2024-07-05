@@ -12,9 +12,13 @@ clap = { version = "4", features = ["derive"] }
 eframe={version = "0.27", features=["wgpu"]}
 image = "0.25"
 lexical-sort="0.3"
+rayon = "1"
 regex="1"
 resvg = "0.42"
 walkdir = "2"
 
 [profile.release]
 strip = true
+
+[profile.dev]
+opt-level = 1

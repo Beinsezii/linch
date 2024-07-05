@@ -18,6 +18,8 @@ use regex::Regex;
 use resvg::{tiny_skia, usvg};
 use walkdir::WalkDir;
 
+use rayon::prelude::*;
+
 #[derive(Clone, PartialEq, Eq)]
 struct Item {
     name: String,
@@ -440,16 +442,17 @@ impl Linch {
             items.sort_unstable_by(|a, b| natural_lexical_cmp(a.as_ref(), b.as_ref()))
         }
 
-        //let now = std::time::Instant::now();
-
-        let mut images = HashMap::new();
+        let color_images = Mutex::new(HashMap::new());
         let acc_pixel = Rgba::from(acc);
         let acc_pixel = [acc_pixel[0], acc_pixel[1], acc_pixel[2]];
         let w = (size[1] * scale / (rows + 1) as f32 / 16.0).ceil() as u32 * 16;
         let h = w;
         if icons {
-            for icon in items.iter().filter_map(|i| i.icon.as_ref()) {
-                if !images.contains_key(icon) {
+            #[cfg(debug_assertions)]
+            let now = std::time::Instant::now();
+
+            items.par_iter().filter_map(|i| i.icon.as_ref()).for_each(|icon| {
+                if !color_images.lock().unwrap().contains_key(icon) {
                     if let Some(path) = get_icon_loc(&icon) {
                         if let Ok(mut file) = File::open(&path) {
                             let mut data = Vec::new();
@@ -497,17 +500,22 @@ impl Linch {
                                             })
                                             .collect();
                                     }
-                                    let th = cc.egui_ctx.load_texture(icon, ci, TextureOptions::default());
-                                    images.insert(icon.to_string(), th);
+                                    color_images.lock().unwrap().insert(icon.to_string(), ci);
                                 }
                             }
                         }
                     }
                 }
-            }
+            });
+            #[cfg(debug_assertions)]
+            println!("Icons loaded in {:?}", now.elapsed());
         }
 
-        //println!("Icons loaded in {}ms", (std::time::Instant::now() - now).as_millis());
+        let mut images = HashMap::new();
+        for (k, v) in color_images.into_inner().unwrap().into_iter() {
+            let th = cc.egui_ctx.load_texture(&k, v, TextureOptions::default());
+            images.insert(k, th);
+        }
 
         columns = ((items.len() as f32 / rows as f32).ceil() as usize).min(columns).max(1);
 
@@ -933,7 +941,11 @@ fn main() {
     let args = LinchArgs::parse();
     match args.command {
         LinchCmd::Bin => {
+            #[cfg(debug_assertions)]
+            let now = std::time::Instant::now();
             let items = get_binaries();
+            #[cfg(debug_assertions)]
+            println!("{} items found in {:?}", items.len(), now.elapsed());
             if let Some(item) = response(
                 items,
                 false,
@@ -953,7 +965,11 @@ fn main() {
             }
         }
         LinchCmd::App { all, monochrome } => {
+            #[cfg(debug_assertions)]
+            let now = std::time::Instant::now();
             let items = get_applications(all);
+            #[cfg(debug_assertions)]
+            println!("{} items found in {:?}", items.len(), now.elapsed());
             if let Some(item) = response(
                 items,
                 false,
