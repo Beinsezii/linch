@@ -9,7 +9,7 @@ edition = "2021"
 colcon="0.10"
 # colcon = {git = "https://github.com/Beinsezii/colcon.git"}
 clap = { version = "4", features = ["derive"] }
-eframe={version = "0.27", features=["wgpu"]}
+eframe={version = "0.28", features = ["wgpu"]}
 image = "0.25"
 lexical-sort="0.3"
 rayon = "1"

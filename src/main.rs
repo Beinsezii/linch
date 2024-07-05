@@ -387,7 +387,7 @@ impl Linch {
     ) -> Self {
         let style = cc.egui_ctx.style().as_ref().clone();
         cc.egui_ctx.set_style(Style {
-            wrap: Some(false),
+            wrap_mode: None,
             visuals: Visuals {
                 widgets: Widgets {
                     noninteractive: WidgetVisuals {
@@ -432,6 +432,7 @@ impl Linch {
                 indent_ends_with_horizontal_line: false,
                 combo_height: 0.0,
                 scroll: ScrollStyle::default(),
+                default_area_size: (0.0, 0.0).into(),
             },
             ..style
         });
@@ -908,7 +909,7 @@ fn response(
             ..Default::default()
         },
         Box::new(move |cc| {
-            Box::new(Linch::new(
+            Ok(Box::new(Linch::new(
                 cc,
                 items,
                 res_send,
@@ -927,7 +928,7 @@ fn response(
                 icons,
                 monochrome,
                 [args.width, args.height],
-            ))
+            )))
         }),
     )
     .expect("Linch died");
